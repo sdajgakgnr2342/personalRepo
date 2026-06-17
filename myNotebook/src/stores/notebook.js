@@ -4,7 +4,14 @@ import * as notebookApi from '@/api/notebook'
 import * as itemApi from '@/api/item'
 
 export const useNotebookStore = defineStore('notebook', () => {
-  const stats = ref({ noteCount: 0, draftCount: 0, recentNotes: [] })
+  const stats = ref({
+    noteCount: 0,
+    draftCount: 0,
+    weeklyUpdateCount: 0,
+    recentNotes: [],
+    trends: { notes: [], drafts: [], updates: [] },
+    deltas: { noteCount: 0, draftCount: 0, weeklyUpdates: 0 },
+  })
   const tree = ref([])
   const drafts = ref([])
   const favorites = ref([])
@@ -68,7 +75,7 @@ export const useNotebookStore = defineStore('notebook', () => {
   async function renameItem(id, name) {
     await itemApi.updateItem(id, { name: name.trim() })
     if (currentItem.value?.id === id) {
-      currentItem.value = { ...currentItem.value, name: name.trim() }
+      currentItem.value.name = name.trim()
     }
     await refreshPartial(['tree'])
   }
@@ -199,15 +206,21 @@ export const useNotebookStore = defineStore('notebook', () => {
   async function saveCurrentNote(payload) {
     if (!currentItem.value) return
     const result = await itemApi.saveNote(currentItem.value.id, payload)
-    currentItem.value = {
-      ...currentItem.value,
+    // 原地更新，避免替换对象引用触发 EditorPanel 重载编辑器、重置光标
+    Object.assign(currentItem.value, {
       ...payload,
       isSaved: true,
       wordCount: result.wordCount,
       lastSavedAt: result.lastSavedAt,
-    }
+    })
     await refreshPartial(['stats', 'tree'])
     return result
+  }
+
+  function resolveModeRightView() {
+    if (sidebarMode.value === 'stats') return 'stats'
+    if (sidebarMode.value === 'tree') return 'tree'
+    return 'empty'
   }
 
   function setSidebarMode(mode) {
@@ -216,6 +229,8 @@ export const useNotebookStore = defineStore('notebook', () => {
     trashSelectedItem.value = null
     if (mode === 'stats') {
       rightView.value = 'stats'
+    } else if (mode === 'tree') {
+      rightView.value = 'tree'
     } else {
       rightView.value = 'empty'
     }
@@ -248,7 +263,7 @@ export const useNotebookStore = defineStore('notebook', () => {
     }
     if (currentItem.value?.id === id) {
       currentItem.value = null
-      rightView.value = sidebarMode.value === 'stats' ? 'stats' : 'empty'
+      rightView.value = resolveModeRightView()
     }
     await refreshPartial(['stats', 'tree', 'trash'])
     persistSession()
@@ -257,7 +272,7 @@ export const useNotebookStore = defineStore('notebook', () => {
   async function toggleFavorite(id) {
     const { isFavorite } = await itemApi.toggleFavorite(id)
     if (currentItem.value?.id === id) {
-      currentItem.value = { ...currentItem.value, isFavorite }
+      currentItem.value.isFavorite = isFavorite
     }
     await loadFavorites()
     await loadTree()
@@ -325,7 +340,7 @@ export const useNotebookStore = defineStore('notebook', () => {
     await itemApi.moveToTrash(id, passwords ? { passwords } : undefined)
     if (currentItem.value?.id === id) {
       currentItem.value = null
-      rightView.value = sidebarMode.value === 'stats' ? 'stats' : 'empty'
+      rightView.value = resolveModeRightView()
     }
     await refreshPartial(['stats', 'tree', 'trash'])
     persistSession()
@@ -345,6 +360,6 @@ export const useNotebookStore = defineStore('notebook', () => {
     findEncryptedFoldersInSubtree, findFolderById, restoreTrashItem, permanentDeleteItem, toggleFavorite,
     getEncryptedFoldersInSubtree, setHasUnsavedChanges, registerEditorActions, unregisterEditorActions,
     tryLeaveEditor,
-    initFromSession, refreshCurrentView, getSessionSnapshot,
+    initFromSession, refreshCurrentView, getSessionSnapshot, applySnapshot,
   }
 })

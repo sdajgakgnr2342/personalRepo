@@ -10,6 +10,8 @@ import Sidebar from '@/components/notebook/Sidebar.vue'
 import StatsPanel from '@/components/notebook/StatsPanel.vue'
 import EditorPanel from '@/components/notebook/EditorPanel.vue'
 import EmptyPanel from '@/components/notebook/EmptyPanel.vue'
+import EmptyState from '@/components/EmptyState.vue'
+import TreePanel from '@/components/notebook/TreePanel.vue'
 import TrashPanel from '@/components/notebook/TrashPanel.vue'
 import UnlockDialog from '@/components/notebook/UnlockDialog.vue'
 import CreateItemDialog from '@/components/notebook/CreateItemDialog.vue'
@@ -22,6 +24,7 @@ const unlockFolder = ref(null)
 const pendingOpenItemId = ref(null)
 const unlockMinutes = ref(5)
 const searchResults = ref([])
+const snapshotBeforeSearch = ref(null)
 const createDialogVisible = ref(false)
 const createDialogType = ref('folder')
 const createParentId = ref(null)
@@ -47,11 +50,11 @@ function toggleMobileSidebar() {
   mobileSidebarOpen.value = !mobileSidebarOpen.value
 }
 
-async function withLeaveGuard(action) {
+async function withLeaveGuard(action, { closeSidebar = true } = {}) {
   const canLeave = await notebookStore.tryLeaveEditor()
   if (!canLeave) return false
   await action()
-  closeMobileSidebar()
+  if (closeSidebar) closeMobileSidebar()
   return true
 }
 
@@ -109,7 +112,7 @@ async function handleRefresh() {
 }
 
 async function handleSelectItem(id) {
-  await withLeaveGuard(async () => {
+  const ok = await withLeaveGuard(async () => {
     try {
       await notebookStore.openItem(id)
     } catch (err) {
@@ -124,7 +127,12 @@ async function handleSelectItem(id) {
         toastError(err.message)
       }
     }
-  })
+  }, { closeSidebar: false })
+
+  // 移动端：浏览文件夹时保持侧栏打开，选中笔记后再关闭
+  if (ok && isMobile.value && notebookStore.currentItem?.itemType === 'note') {
+    closeMobileSidebar()
+  }
 }
 
 function handleOpenNote(note) {
@@ -164,9 +172,25 @@ async function handleUnlocked(result) {
 
 async function handleSearch(keyword) {
   await withLeaveGuard(async () => {
+    snapshotBeforeSearch.value = notebookStore.getSessionSnapshot()
     searchResults.value = await searchNotes(keyword)
     notebookStore.showSearch()
   })
+}
+
+async function handleSearchBack() {
+  const snapshot = snapshotBeforeSearch.value
+  snapshotBeforeSearch.value = null
+  if (snapshot) {
+    try {
+      await notebookStore.applySnapshot(snapshot)
+    } catch (err) {
+      toastError(err.message || '返回失败')
+      notebookStore.showStats()
+    }
+    return
+  }
+  notebookStore.showStats()
 }
 
 function handleCreateFolder({ parentId }) {
@@ -248,9 +272,13 @@ async function handleSelectTrashItem(item) {
 }
 
 async function handleSwitchMode(mode) {
-  await withLeaveGuard(() => {
+  const ok = await withLeaveGuard(() => {
     notebookStore.setSidebarMode(mode)
-  })
+  }, { closeSidebar: false })
+
+  if (ok && isMobile.value && mode === 'tree') {
+    closeMobileSidebar()
+  }
 }
 
 async function handleDeleteConfirm(payload = {}) {
@@ -291,14 +319,11 @@ async function handleDeleteConfirm(payload = {}) {
 
       <Sidebar
         :mobile-open="mobileSidebarOpen"
+        @close-mobile="closeMobileSidebar"
         @select-item="handleSelectItem"
         @select-trash-item="handleSelectTrashItem"
-        @unlock-folder="handleUnlockFolder"
         @show-stats="handleShowStats"
         @switch-mode="handleSwitchMode"
-        @create-folder="handleCreateFolder"
-        @create-note="handleCreateNote"
-        @delete-item="handleDeleteItem"
       />
 
       <div class="main-area">
@@ -307,10 +332,19 @@ async function handleDeleteConfirm(payload = {}) {
           @open-note="handleOpenNote"
         />
 
+        <TreePanel
+          v-else-if="notebookStore.rightView === 'tree'"
+          @select-item="handleSelectItem"
+          @unlock-folder="handleUnlockFolder"
+          @create-folder="handleCreateFolder"
+          @create-note="handleCreateNote"
+          @delete-item="handleDeleteItem"
+        />
+
         <div v-else-if="notebookStore.rightView === 'search'" class="search-results">
           <div class="search-header">
-            搜索结果 ({{ searchResults.length }})
-            <button class="back-btn" @click="handleShowStats">返回统计</button>
+            <span>搜索结果 ({{ searchResults.length }})</span>
+            <button type="button" class="search-back" @click="handleSearchBack">返回</button>
           </div>
           <div
             v-for="item in searchResults"
@@ -321,7 +355,13 @@ async function handleDeleteConfirm(payload = {}) {
             <span>{{ item.name }}</span>
             <span class="search-meta">{{ item.wordCount ?? item.word_count }} 字</span>
           </div>
-          <div v-if="!searchResults.length" class="search-empty">未找到匹配的笔记</div>
+          <EmptyState
+            v-if="!searchResults.length"
+            fill
+            size="md"
+            title="未找到匹配的笔记"
+            description="试试其他关键词"
+          />
         </div>
 
         <EditorPanel
@@ -402,8 +442,11 @@ async function handleDeleteConfirm(payload = {}) {
 
 .search-results {
   flex: 1;
+  display: flex;
+  flex-direction: column;
   overflow-y: auto;
   padding: 16px 24px;
+  min-height: 0;
 }
 
 .search-header {
@@ -415,19 +458,18 @@ async function handleDeleteConfirm(payload = {}) {
   margin-bottom: 12px;
 }
 
-.back-btn {
-  padding: 4px 12px;
-  border: 1px solid #e5e7eb;
-  border-radius: 6px;
-  background: #fff;
-  font-size: 13px;
+.search-back {
+  padding: 0;
+  border: none;
+  background: none;
+  font-size: 14px;
+  color: #2563eb;
   cursor: pointer;
-  color: #64748b;
 }
 
-.back-btn:hover {
-  border-color: #2563eb;
-  color: #2563eb;
+.search-back:hover {
+  color: #1d4ed8;
+  text-decoration: underline;
 }
 
 .search-item {
@@ -446,13 +488,6 @@ async function handleDeleteConfirm(payload = {}) {
 .search-meta {
   font-size: 12px;
   color: #9ca3af;
-}
-
-.search-empty {
-  text-align: center;
-  padding: 48px;
-  color: #9ca3af;
-  font-size: 14px;
 }
 
 @media (max-width: 768px) {

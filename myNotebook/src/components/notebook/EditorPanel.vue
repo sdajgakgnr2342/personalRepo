@@ -2,8 +2,11 @@
 import { ref, computed, watch, nextTick, onBeforeUnmount, onMounted } from 'vue'
 import { useNotebookStore } from '@/stores/notebook'
 import { shareNote, uploadAttachment, getAttachments, deleteAttachment } from '@/api/item'
-import { toastSuccess, toastError, toastWarning } from '@/utils/toast'
+import { toastSuccess, toastError, toastWarning, toastInfo } from '@/utils/toast'
 import UnsavedChangesDialog from './UnsavedChangesDialog.vue'
+import WechatConfirmDialog from './WechatConfirmDialog.vue'
+import AppIcon from '@/components/AppIcon.vue'
+import EmptyState from '@/components/EmptyState.vue'
 
 const notebookStore = useNotebookStore()
 
@@ -13,6 +16,8 @@ const editTitle = ref('')
 const editContent = ref('')
 const folderName = ref('')
 const isEditing = ref(true)
+const isEditingTitle = ref(false)
+const titleBeforeEdit = ref('')
 const saving = ref(false)
 const message = ref('')
 const history = ref([])
@@ -48,6 +53,7 @@ const fontColor = ref('#374151')
 const imgContextMenu = ref({ visible: false, x: 0, y: 0, src: '', alt: '', imgEl: null })
 const imagePreview = ref({ visible: false, src: '', alt: '' })
 const leaveDialogVisible = ref(false)
+const clearDialogVisible = ref(false)
 let pendingLeaveResolve = null
 
 const saveStatusText = computed(() => {
@@ -174,14 +180,13 @@ async function saveNote(options = {}) {
     saveStatus.value = 'saved'
     syncUnsavedState()
     if (manual) {
-      message.value = '保存成功'
-      setTimeout(() => { message.value = '' }, 2000)
+      toastSuccess('保存成功')
     }
     return true
   } catch (err) {
     saveStatus.value = 'error'
     syncUnsavedState()
-    if (manual) message.value = err.message
+    if (manual) toastError(err.message || '保存失败')
     scheduleAutoSave()
     return false
   } finally {
@@ -708,14 +713,13 @@ watch(currentItem, async (item, oldItem) => {
     history.value = [{ title: editTitle.value, content: editContent.value }]
     historyIndex.value = 0
     isEditing.value = true
+    isEditingTitle.value = false
     await loadAttachments()
     await nextTick()
     syncEditorFromContent()
     if (notebookStore.pendingRenameItemId === item.id) {
-      await nextTick()
-      titleInputRef.value?.focus()
-      titleInputRef.value?.select()
       notebookStore.pendingRenameItemId = null
+      startTitleEdit()
     }
   } else if (item?.itemType === 'folder') {
     attachments.value = []
@@ -773,7 +777,30 @@ function handleRedo() {
   })
 }
 
+function startTitleEdit() {
+  titleBeforeEdit.value = editTitle.value
+  isEditingTitle.value = true
+  nextTick(() => {
+    titleInputRef.value?.focus()
+    titleInputRef.value?.select()
+  })
+}
+
+function finishTitleEdit() {
+  if (!isEditingTitle.value) return
+  isEditingTitle.value = false
+  pushHistory()
+}
+
+function cancelTitleEdit() {
+  if (!isEditingTitle.value) return
+  editTitle.value = titleBeforeEdit.value
+  isEditingTitle.value = false
+  syncUnsavedState()
+}
+
 function handleEditToggle() {
+  if (isEditingTitle.value) finishTitleEdit()
   isEditing.value = !isEditing.value
   if (isEditing.value) {
     nextTick(syncEditorFromContent)
@@ -782,6 +809,7 @@ function handleEditToggle() {
 
 async function handleSave() {
   if (!currentItem.value) return
+  if (isEditingTitle.value) finishTitleEdit()
   message.value = ''
   pushHistory()
   const ok = await saveNote({ manual: true, force: true })
@@ -871,6 +899,43 @@ async function handleRemoveAttachment(id) {
   }
 }
 
+function handleClear() {
+  if (!currentItem.value || currentItem.value.itemType !== 'note') return
+
+  const hasContent = !!editContent.value.replace(/<[^>]+>/g, '').replace(/\s/g, '').length
+    || editContent.value.includes('<img')
+  const hasAttachments = attachments.value.length > 0
+
+  if (!hasContent && !hasAttachments) {
+    toastInfo('笔记内容已是空的')
+    return
+  }
+
+  clearDialogVisible.value = true
+}
+
+async function handleClearConfirm() {
+  clearDialogVisible.value = false
+
+  try {
+    for (const file of [...attachments.value]) {
+      await deleteAttachment(file.id)
+    }
+    attachments.value = []
+
+    editContent.value = ''
+    isEditing.value = true
+    await nextTick()
+    syncEditorFromContent()
+    pushHistory()
+    markDirty()
+    toastSuccess('已清空')
+  } catch (err) {
+    toastError(err.message || '清空失败')
+    await loadAttachments()
+  }
+}
+
 function formatSavedTime(dateStr) {
   if (!dateStr) return '未保存'
   const d = new Date(dateStr)
@@ -882,13 +947,11 @@ function formatSavedTime(dateStr) {
 async function handleFolderRename() {
   if (!currentItem.value || !folderName.value.trim()) return
   saving.value = true
-  message.value = ''
   try {
     await notebookStore.renameItem(currentItem.value.id, folderName.value.trim())
-    message.value = '文件夹已保存'
-    setTimeout(() => { message.value = '' }, 2000)
+    toastSuccess('保存成功')
   } catch (err) {
-    message.value = err.message
+    toastError(err.message || '保存失败')
   } finally {
     saving.value = false
   }
@@ -926,51 +989,67 @@ onBeforeUnmount(() => {
       <!-- 工具栏 -->
       <div class="toolbar">
         <div class="toolbar-row">
-          <button class="tool-btn primary" :disabled="saving" @click="handleSave">
-            💾 保存
+          <button class="tool-btn" :disabled="saving" title="保存" @click="handleSave">
+            <AppIcon name="save" :size="18" alt="保存" />
           </button>
-          <button class="tool-btn" @click="handleEditToggle">
-            ✏️ {{ isEditing ? '预览' : '编辑' }}
+          <button class="tool-btn" :title="isEditing ? '预览' : '编辑'" @click="handleEditToggle">
+            <AppIcon :name="isEditing ? 'preview' : 'edit'" :size="18" :alt="isEditing ? '预览' : '编辑'" />
           </button>
-          <button class="tool-btn" @mousedown.prevent @click="handleUndo">↩ 撤销</button>
-          <button class="tool-btn" @mousedown.prevent @click="handleRedo">↪ 恢复</button>
-          <button class="tool-btn" :class="{ active: isFavorite }" @click="handleToggleFavorite">
-            {{ isFavorite ? '★' : '☆' }} 收藏
+          <button class="tool-btn" title="撤销" @mousedown.prevent @click="handleUndo">
+            <AppIcon name="undo" :size="18" alt="撤销" />
           </button>
-          <button class="tool-btn" :class="{ disabled: !canShare }" @click="handleShare">
-            🔗 分享
+          <button class="tool-btn" title="恢复" @mousedown.prevent @click="handleRedo">
+            <AppIcon name="redo" :size="18" alt="恢复" />
           </button>
-          <button class="tool-btn" @click="handleInsertImage">🖼 插入图片</button>
-          <button class="tool-btn" @click="handleAttachment">📎 附件</button>
-          <button class="tool-btn danger" @click="handleDelete">🗑 删除</button>
+          <button class="tool-btn" :class="{ favorited: isFavorite }" title="收藏" @click="handleToggleFavorite">
+            <AppIcon :name="isFavorite ? 'favorite-filled' : 'favorite-outline'" :size="18" alt="收藏" />
+          </button>
+          <button class="tool-btn" :class="{ disabled: !canShare }" title="分享" @click="handleShare">
+            <AppIcon name="share" :size="18" alt="分享" />
+          </button>
+          <button class="tool-btn" title="插入图片" @click="handleInsertImage">
+            <AppIcon name="insert-image" :size="18" alt="插入图片" />
+          </button>
+          <button class="tool-btn" title="附件" @click="handleAttachment">
+            <AppIcon name="attachment" :size="18" alt="附件" />
+          </button>
+          <button class="tool-btn" title="清空" @click="handleClear">
+            <AppIcon name="clear" :size="18" alt="清空" />
+          </button>
+          <button class="tool-btn danger" title="删除" @click="handleDelete">
+            <AppIcon name="delete" :size="18" alt="删除" />
+          </button>
 
           <template v-if="isEditing">
             <span class="toolbar-divider" />
-            <button type="button" class="fmt-btn" title="加粗" @mousedown.prevent="handleFormatMouseDown" @click="execEditorCommand('bold')">
-              <strong>B</strong>
+            <button type="button" class="tool-btn" title="加粗" @mousedown.prevent="handleFormatMouseDown" @click="execEditorCommand('bold')">
+              <AppIcon name="bold" :size="18" alt="加粗" />
             </button>
-            <button type="button" class="fmt-btn" title="倾斜" @mousedown.prevent="handleFormatMouseDown" @click="execEditorCommand('italic')">
-              <em>I</em>
+            <button type="button" class="tool-btn" title="倾斜" @mousedown.prevent="handleFormatMouseDown" @click="execEditorCommand('italic')">
+              <AppIcon name="italic" :size="18" alt="倾斜" />
             </button>
-            <span class="fmt-divider" />
-            <button type="button" class="fmt-btn" title="左对齐" @mousedown.prevent="handleFormatMouseDown" @click="applyTextOrImageAlignment('justifyLeft')">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M4 6h16M4 10h10M4 14h16M4 18h8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+            <span class="toolbar-divider" />
+            <button type="button" class="tool-btn" title="左对齐" @mousedown.prevent="handleFormatMouseDown" @click="applyTextOrImageAlignment('justifyLeft')">
+              <AppIcon name="align-left" :size="18" alt="左对齐" />
             </button>
-            <button type="button" class="fmt-btn" title="居中对齐" @mousedown.prevent="handleFormatMouseDown" @click="applyTextOrImageAlignment('justifyCenter')">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M4 6h16M7 10h10M4 14h16M8 18h8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+            <button type="button" class="tool-btn" title="居中对齐" @mousedown.prevent="handleFormatMouseDown" @click="applyTextOrImageAlignment('justifyCenter')">
+              <AppIcon name="align-center" :size="18" alt="居中对齐" />
             </button>
-            <button type="button" class="fmt-btn" title="右对齐" @mousedown.prevent="handleFormatMouseDown" @click="applyTextOrImageAlignment('justifyRight')">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M4 6h16M10 10h10M4 14h16M12 18h8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+            <button type="button" class="tool-btn" title="右对齐" @mousedown.prevent="handleFormatMouseDown" @click="applyTextOrImageAlignment('justifyRight')">
+              <AppIcon name="align-right" :size="18" alt="右对齐" />
             </button>
-            <span class="fmt-divider" />
-            <label class="fmt-color" title="字体颜色" @mousedown.prevent="handleFormatMouseDown">
-              <span class="fmt-color-icon" :style="{ color: fontColor }">A</span>
+            <span class="toolbar-divider" />
+            <label class="tool-btn fmt-color" title="字体颜色" @mousedown.prevent="handleFormatMouseDown">
+              <AppIcon name="text-color" :size="18" alt="字体颜色" />
               <input type="color" v-model="fontColor" class="fmt-color-input" @input="handleColorChange" />
             </label>
-            <select class="fmt-select" title="字体大小" @mousedown="handleFormatMouseDown" @change="handleFontSizeChange">
-              <option value="">字号</option>
-              <option v-for="size in fontSizes" :key="size" :value="size">{{ size }}px</option>
-            </select>
+            <label class="tool-btn fmt-size" title="字体大小" @mousedown="handleFormatMouseDown">
+              <span class="fmt-size-icon">font</span>
+              <select class="fmt-size-select" @change="handleFontSizeChange">
+                <option value="">默认</option>
+                <option v-for="size in fontSizes" :key="size" :value="size">{{ size }}px</option>
+              </select>
+            </label>
           </template>
 
           <span v-if="message" class="save-msg">{{ message }}</span>
@@ -980,15 +1059,28 @@ onBeforeUnmount(() => {
       <!-- 内容区 -->
       <div class="content-area">
         <div class="title-row">
-          <input
-            v-if="isEditing"
-            ref="titleInputRef"
-            v-model="editTitle"
-            class="title-input"
-            placeholder="笔记标题"
-            @blur="pushHistory"
-          />
-          <h1 v-else class="title-display">{{ editTitle || '无标题' }}</h1>
+          <div class="title-main">
+            <input
+              v-if="isEditingTitle"
+              ref="titleInputRef"
+              v-model="editTitle"
+              class="title-input"
+              placeholder="笔记标题"
+              @blur="finishTitleEdit"
+              @keydown.enter.prevent="finishTitleEdit"
+              @keydown.esc.prevent="cancelTitleEdit"
+            />
+            <h1 v-else class="title-display">{{ editTitle || '无标题' }}</h1>
+            <button
+              v-if="isEditing && !isEditingTitle"
+              type="button"
+              class="title-edit-btn"
+              title="修改标题"
+              @click="startTitleEdit"
+            >
+              <AppIcon name="edit" :size="16" alt="修改标题" />
+            </button>
+          </div>
           <span class="save-status" :class="saveStatus">{{ saveStatusText }}</span>
         </div>
 
@@ -1015,16 +1107,16 @@ onBeforeUnmount(() => {
 
         <section v-if="attachments.length || attachmentsLoading" class="attachments-section">
           <h4 class="attachments-title">
-            📎 附件列表
+            <AppIcon name="attachment" :size="16" alt="" /> 附件列表
             <span v-if="!attachmentsLoading">({{ attachments.length }})</span>
           </h4>
-          <p v-if="attachmentsLoading" class="attachments-empty">加载中...</p>
+          <p v-if="attachmentsLoading" class="attachments-loading">加载中...</p>
           <ul v-else class="attachments-list">
             <li v-for="file in attachments" :key="file.id" class="attachment-item">
               <div v-if="isImageFile(file)" class="attachment-image-wrap">
                 <img :src="resolveFileUrl(file.url)" :alt="file.fileName" class="attachment-thumb" />
               </div>
-              <span v-else class="attachment-icon">📄</span>
+              <AppIcon v-else name="note" :size="24" class="attachment-icon" alt="" />
               <div class="attachment-info">
                 <a :href="resolveFileUrl(file.url)" target="_blank" rel="noopener" class="attachment-name">
                   {{ file.fileName }}
@@ -1032,34 +1124,39 @@ onBeforeUnmount(() => {
                 <span class="attachment-meta">{{ formatFileSize(file.fileSize) }}</span>
               </div>
               <button type="button" class="attachment-del" title="删除附件" @click="handleRemoveAttachment(file.id)">
-                ×
+                <AppIcon name="close" :size="14" alt="删除" />
               </button>
             </li>
           </ul>
         </section>
         <section v-else class="attachments-section attachments-empty-section">
-          <p class="attachments-empty">暂无附件，可通过「插入图片」或「附件」按钮上传</p>
+          <EmptyState
+            size="inline"
+            title="暂无附件"
+            hint="可通过工具栏插入图片或上传附件"
+          />
         </section>
       </div>
 
       <!-- 状态栏 -->
       <div class="status-bar">
-        <span>📄 最后保存: {{ formatSavedTime(currentItem.lastSavedAt) }}</span>
-        <span>📊 字数: {{ wordCount }}</span>
-        <span>📍 当前笔记位置: {{ currentItem.breadcrumb || currentItem.name }}</span>
+        <span><AppIcon name="note" :size="14" alt="" /> 最后保存: {{ formatSavedTime(currentItem.lastSavedAt) }}</span>
+        <span><AppIcon name="stats" :size="14" alt="" /> 字数: {{ wordCount }}</span>
       </div>
     </template>
 
     <div v-else-if="currentItem && currentItem.itemType === 'folder'" class="folder-panel">
       <div class="folder-toolbar">
-        <button class="tool-btn primary" :disabled="saving" @click="handleFolderRename">
-          💾 保存名称
+        <button type="button" class="folder-action-btn primary" :disabled="saving" title="保存名称" @click="handleFolderRename">
+          <AppIcon name="save" :size="18" alt="保存" />
         </button>
-        <button class="tool-btn danger" @click="handleDelete">🗑 删除</button>
+        <button type="button" class="folder-action-btn danger" title="删除" @click="handleDelete">
+          <AppIcon name="delete" :size="18" alt="删除" />
+        </button>
         <span v-if="message" class="save-msg">{{ message }}</span>
       </div>
       <div class="folder-content">
-        <span class="folder-icon">📁</span>
+        <AppIcon name="folder" :size="48" class="folder-icon" alt="" />
         <input
           ref="folderNameInputRef"
           v-model="folderName"
@@ -1067,13 +1164,17 @@ onBeforeUnmount(() => {
           placeholder="文件夹名称"
           @keyup.enter="handleFolderRename"
         />
-        <p class="hint">在此修改文件夹名称，点击左侧 + 或右键在此文件夹下新建内容</p>
+        <p class="hint">在此修改文件夹名称，点击右上角 + 或右键在此文件夹下新建内容</p>
       </div>
     </div>
 
-    <div v-else class="empty-state">
-      <p>未选中任何内容</p>
-    </div>
+    <EmptyState
+      v-else
+      fill
+      size="lg"
+      title="未选中任何内容"
+      description="从左侧选择一篇笔记或文件夹"
+    />
 
     <input ref="imageInput" type="file" accept="image/*" hidden @change="handleImageChange" />
     <input ref="fileInput" type="file" hidden @change="handleFileChange" />
@@ -1086,13 +1187,19 @@ onBeforeUnmount(() => {
         @click.stop
         @contextmenu.prevent
       >
-        <button type="button" @click="handleViewEditorImage">🖼 查看图片</button>
-        <button type="button" class="danger" @click="handleDeleteEditorImage">🗑 删除图片</button>
+        <button type="button" @click="handleViewEditorImage">
+          <AppIcon name="view-image" :size="16" alt="" /> 查看图片
+        </button>
+        <button type="button" class="danger" @click="handleDeleteEditorImage">
+          <AppIcon name="delete" :size="16" alt="" /> 删除图片
+        </button>
       </div>
 
       <div v-if="imagePreview.visible" class="image-preview-overlay" @click="closeImagePreview">
         <div class="image-preview-box" @click.stop>
-          <button type="button" class="image-preview-close" @click="closeImagePreview">×</button>
+          <button type="button" class="image-preview-close" @click="closeImagePreview">
+            <AppIcon name="close" :size="18" alt="关闭" />
+          </button>
           <img :src="imagePreview.src" :alt="imagePreview.alt" class="image-preview-img" />
           <p v-if="imagePreview.alt" class="image-preview-caption">{{ imagePreview.alt }}</p>
         </div>
@@ -1104,6 +1211,16 @@ onBeforeUnmount(() => {
       @save="handleLeaveSave"
       @discard="handleLeaveDiscard"
       @cancel="handleLeaveCancel"
+    />
+
+    <WechatConfirmDialog
+      :visible="clearDialogVisible"
+      title="清空笔记"
+      :message="'确定清空笔记正文和所有图片吗？\n此操作不可撤销，清空后需手动保存。'"
+      confirm-text="清空"
+      :danger="true"
+      @close="clearDialogVisible = false"
+      @confirm="handleClearConfirm"
     />
   </div>
 </template>
@@ -1126,64 +1243,68 @@ onBeforeUnmount(() => {
 .toolbar-row {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 3px;
   flex-wrap: wrap;
 }
 
 .toolbar-divider {
   width: 1px;
-  height: 20px;
+  height: 24px;
   background: #e5e7eb;
   margin: 0 2px;
   flex-shrink: 0;
 }
 
 .tool-btn {
-  padding: 5px 12px;
-  border: 1px solid #e5e7eb;
-  border-radius: 6px;
-  background: #fff;
-  font-size: 13px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
   cursor: pointer;
   color: #374151;
-  transition: all 0.15s;
+  flex-shrink: 0;
+  transition: background 0.15s, box-shadow 0.15s, transform 0.12s;
 }
 
-.tool-btn:hover {
-  border-color: #2563eb;
-  color: #2563eb;
+.tool-btn:hover:not(:disabled):not(.disabled) {
+  background: #eff6ff;
+}
+
+.tool-btn:active:not(:disabled):not(.disabled) {
+  transform: scale(0.94);
 }
 
 .tool-btn.primary {
   background: #2563eb;
-  color: #fff;
-  border-color: #2563eb;
 }
 
-.tool-btn.primary:hover {
+.tool-btn.primary:hover:not(:disabled) {
   background: #1d4ed8;
+  box-shadow: 0 2px 8px rgba(37, 99, 235, 0.28);
 }
 
+.tool-btn.primary:active:not(:disabled) {
+  transform: scale(0.94);
+}
+
+.tool-btn:disabled,
 .tool-btn.disabled {
-  opacity: 0.5;
+  opacity: 0.45;
   cursor: not-allowed;
+  pointer-events: none;
 }
 
-.tool-btn.active {
-  background: #fef3c7;
-  border-color: #fbbf24;
-  color: #b45309;
+.tool-btn.favorited :deep(.app-icon) {
+  opacity: 0.72;
 }
 
-.tool-btn.danger {
-  color: #ef4444;
-  border-color: #fecaca;
-}
-
-.tool-btn.danger:hover {
+.tool-btn.danger:hover:not(:disabled) {
   background: #fef2f2;
-  border-color: #ef4444;
-  color: #dc2626;
 }
 
 .save-msg {
@@ -1192,71 +1313,8 @@ onBeforeUnmount(() => {
   margin-left: 4px;
 }
 
-.fmt-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 30px;
-  height: 30px;
-  padding: 0 8px;
-  border: 1px solid #e5e7eb;
-  border-radius: 6px;
-  background: #fff;
-  font-size: 14px;
-  color: #374151;
-  cursor: pointer;
-  transition: all 0.15s;
-}
-
-.fmt-btn:hover {
-  border-color: #2563eb;
-  color: #2563eb;
-  background: #f8fafc;
-}
-
-.fmt-btn strong,
-.fmt-btn em {
-  font-size: 14px;
-  font-style: normal;
-  font-weight: 700;
-}
-
-.fmt-btn em {
-  font-style: italic;
-  font-weight: 600;
-}
-
-.fmt-divider {
-  width: 1px;
-  height: 20px;
-  background: #e5e7eb;
-  margin: 0 2px;
-}
-
 .fmt-color {
   position: relative;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 30px;
-  height: 30px;
-  padding: 0 8px;
-  border: 1px solid #e5e7eb;
-  border-radius: 6px;
-  background: #fff;
-  cursor: pointer;
-  transition: all 0.15s;
-}
-
-.fmt-color:hover {
-  border-color: #2563eb;
-  background: #f8fafc;
-}
-
-.fmt-color-icon {
-  font-weight: 700;
-  font-size: 15px;
-  line-height: 1;
 }
 
 .fmt-color-input {
@@ -1266,25 +1324,32 @@ onBeforeUnmount(() => {
   cursor: pointer;
 }
 
-.fmt-select {
-  height: 30px;
-  padding: 0 8px;
-  border: 1px solid #e5e7eb;
-  border-radius: 6px;
-  background: #fff;
-  font-size: 13px;
-  color: #374151;
-  cursor: pointer;
-  outline: none;
+.fmt-size {
+  position: relative;
 }
 
-.fmt-select:hover,
-.fmt-select:focus {
-  border-color: #2563eb;
+.fmt-size-icon {
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  color: #374151;
+  pointer-events: none;
+  user-select: none;
+  letter-spacing: -0.02em;
+}
+
+.fmt-size-select {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+  width: 100%;
+  height: 100%;
 }
 
 .content-area {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
   padding: 24px 32px;
 }
@@ -1297,9 +1362,38 @@ onBeforeUnmount(() => {
   flex-wrap: wrap;
 }
 
-.title-input {
+.title-main {
   flex: 1;
   min-width: 200px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.title-edit-btn {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+  opacity: 0.55;
+  transition: opacity 0.15s, background 0.15s;
+}
+
+.title-edit-btn:hover {
+  opacity: 1;
+  background: #eff6ff;
+}
+
+.title-input {
+  flex: 1;
+  min-width: 0;
   border: none;
   font-size: 28px;
   font-weight: 600;
@@ -1311,8 +1405,10 @@ onBeforeUnmount(() => {
 
 .title-display {
   flex: 1;
-  min-width: 200px;
+  min-width: 0;
   font-size: 28px;
+  font-weight: 600;
+  color: #1e293b;
   margin: 0;
 }
 
@@ -1445,6 +1541,9 @@ onBeforeUnmount(() => {
 }
 
 .attachments-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   margin: 0 0 12px;
   font-size: 15px;
   color: #334155;
@@ -1483,10 +1582,11 @@ onBeforeUnmount(() => {
 }
 
 .attachment-icon {
-  font-size: 28px;
   flex-shrink: 0;
   width: 48px;
-  text-align: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .attachment-info {
@@ -1531,11 +1631,10 @@ onBeforeUnmount(() => {
 }
 
 .attachments-empty-section {
-  border-top: none;
   padding-top: 0;
 }
 
-.attachments-empty {
+.attachments-loading {
   margin: 0;
   font-size: 13px;
   color: #94a3b8;
@@ -1544,41 +1643,19 @@ onBeforeUnmount(() => {
 .status-bar {
   display: flex;
   justify-content: space-between;
+  gap: 12px;
   padding: 8px 16px;
   border-top: 1px solid #e5e7eb;
   font-size: 12px;
   color: #9ca3af;
   flex-shrink: 0;
-  gap: 8px;
   flex-wrap: wrap;
 }
 
-.empty-state {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
+.status-bar span {
+  display: inline-flex;
   align-items: center;
-  justify-content: center;
-  color: #64748b;
-}
-
-.empty-state h2 {
-  font-size: 24px;
-  margin-bottom: 16px;
-}
-
-.welcome-box {
-  border: 1px solid #e5e7eb;
-  border-radius: 8px;
-  padding: 24px 32px;
-  max-width: 480px;
-  text-align: left;
-}
-
-.welcome-box ul {
-  margin: 12px 0 0;
-  padding-left: 20px;
-  line-height: 2;
+  gap: 4px;
 }
 
 .hint {
@@ -1598,16 +1675,52 @@ onBeforeUnmount(() => {
   border-bottom: 1px solid #e5e7eb;
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.folder-action-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.15s, transform 0.12s;
+}
+
+.folder-action-btn:hover:not(:disabled) {
+  background: #eff6ff;
+}
+
+.folder-action-btn:active:not(:disabled) {
+  transform: scale(0.94);
+}
+
+.folder-action-btn.primary {
+  background: #2563eb;
+}
+
+.folder-action-btn.primary:hover:not(:disabled) {
+  background: #1d4ed8;
+}
+
+.folder-action-btn.danger:hover:not(:disabled) {
+  background: #fef2f2;
 }
 
 .folder-content {
   flex: 1;
   padding: 40px 32px;
+  min-width: 0;
 }
 
 .folder-icon {
-  font-size: 48px;
   display: block;
   margin-bottom: 16px;
 }
@@ -1641,7 +1754,9 @@ onBeforeUnmount(() => {
 }
 
 .img-ctx-menu button {
-  display: block;
+  display: flex;
+  align-items: center;
+  gap: 8px;
   width: 100%;
   padding: 9px 14px;
   border: none;
@@ -1690,12 +1805,13 @@ onBeforeUnmount(() => {
   right: 0;
   width: 32px;
   height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
   border: none;
   border-radius: 50%;
   background: rgba(255, 255, 255, 0.2);
-  color: #fff;
-  font-size: 22px;
-  line-height: 1;
   cursor: pointer;
 }
 
@@ -1720,36 +1836,193 @@ onBeforeUnmount(() => {
 
 @media (max-width: 768px) {
   .toolbar {
-    padding: 8px 12px;
+    padding: 6px 8px;
   }
 
   .tool-btn {
-    padding: 5px 8px;
-    font-size: 12px;
+    width: 34px;
+    height: 34px;
+  }
+
+  .content-area {
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
   }
 
   .title-row {
-    flex-wrap: wrap;
+    flex-shrink: 0;
+    flex-wrap: nowrap;
+    align-items: center;
     gap: 8px;
-    padding: 12px 16px 0;
+    margin-bottom: 0;
+    padding: 8px 8px 4px;
+  }
+
+  .title-main {
+    min-width: 0;
+  }
+
+  .title-edit-btn {
+    width: 26px;
+    height: 26px;
   }
 
   .title-input,
   .title-display {
-    font-size: 20px;
+    flex: 1;
+    min-width: 0;
+    font-size: 16px;
+    font-weight: 600;
+  }
+
+  .title-row .save-status {
+    flex-shrink: 0;
+    font-size: 11px;
+  }
+
+  .editor-body {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    border: none;
+    border-radius: 0;
   }
 
   .content-editor,
   .content-preview {
-    padding: 12px;
-    font-size: 14px;
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 10px 8px;
+    font-size: 15px;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .content-editor :deep(.content-img),
+  .content-preview :deep(.content-img) {
+    border: none;
+    border-radius: 0;
+    max-width: 100%;
+  }
+
+  .content-editor :deep(.content-img-wrap),
+  .content-preview :deep(.content-img-wrap) {
+    margin: 8px 0;
+  }
+
+  .attachments-section {
+    flex-shrink: 0;
+    margin-top: 0;
+    padding: 6px 8px 8px;
+    border-top: 1px solid #f1f5f9;
+  }
+
+  .attachments-title {
+    margin: 0 0 6px;
+    font-size: 12px;
+    font-weight: 500;
+    color: #64748b;
+  }
+
+  .attachments-list {
+    flex-direction: row;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overflow-y: hidden;
+    gap: 8px;
+    padding-bottom: 2px;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+
+  .attachments-list::-webkit-scrollbar {
+    display: none;
+  }
+
+  .attachment-item {
+    flex: 0 0 auto;
+    width: 76px;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    padding: 6px 4px 4px;
+    position: relative;
+  }
+
+  .attachment-image-wrap {
+    width: 64px;
+    height: 64px;
+  }
+
+  .attachment-thumb {
+    width: 64px;
+    height: 64px;
+  }
+
+  .attachment-icon {
+    width: 64px;
+    height: 64px;
+    border: 1px solid #e5e7eb;
+    border-radius: 6px;
+    background: #fff;
+  }
+
+  .attachment-info {
+    width: 100%;
+    text-align: center;
+  }
+
+  .attachment-name {
+    font-size: 11px;
+  }
+
+  .attachment-meta {
+    display: none;
+  }
+
+  .attachment-del {
+    position: absolute;
+    top: 0;
+    right: 0;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.92);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+  }
+
+  .attachments-empty-section {
+    flex-shrink: 0;
+    margin-top: 0;
+    padding: 4px 8px 6px;
+    border-top: 1px solid #f1f5f9;
   }
 
   .status-bar {
-    flex-wrap: wrap;
-    gap: 6px 12px;
+    flex-direction: row;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: nowrap;
+    gap: 12px;
     padding: 8px 12px;
-    font-size: 12px;
+    font-size: 11px;
+  }
+
+  .folder-toolbar {
+    padding: 6px 8px;
+  }
+
+  .folder-content {
+    padding: 24px 16px;
+  }
+
+  .folder-name-input {
+    font-size: 18px;
   }
 }
 </style>

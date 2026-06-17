@@ -1,6 +1,12 @@
+<script setup>
+import { useRouter } from 'vue-router'
+
+const router = useRouter()
+</script>
+
 <template>
   <div class="about">
-    <button type="button" class="back-btn" @click="$router.push('/')">← 返回笔记本</button>
+    <button type="button" class="back-link" @click="router.back()">返回</button>
     <h1>关于项目</h1>
     <p>基于 Vue 3 + Vite 构建的前后端分离开发框架。</p>
 
@@ -34,20 +40,19 @@
   text-align: left;
 }
 
-.back-btn {
+.back-link {
+  display: inline-block;
   margin-bottom: 20px;
-  padding: 6px 12px;
-  border: 1px solid #e5e7eb;
-  border-radius: 6px;
-  background: #fff;
-  color: #64748b;
-  font-size: 14px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: #576b95;
+  font-size: 15px;
   cursor: pointer;
 }
 
-.back-btn:hover {
-  border-color: #2563eb;
-  color: #2563eb;
+.back-link:hover {
+  opacity: 0.85;
 }
 
 .section {

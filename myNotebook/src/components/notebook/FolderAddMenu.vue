@@ -1,5 +1,6 @@
 <script setup>
 import { ref, onMounted, onUnmounted } from 'vue'
+import AppIcon from '@/components/AppIcon.vue'
 
 defineProps({
   title: { type: String, default: '在此目录下新建' },
@@ -29,10 +30,16 @@ onUnmounted(() => document.removeEventListener('click', closeMenu))
 
 <template>
   <div class="add-menu-wrap" @click.stop>
-    <button type="button" class="add-btn" :class="{ visible: showMenu }" title="新建" @click="toggleMenu">+</button>
+    <button type="button" class="add-btn" :class="{ visible: showMenu }" title="新建" @click="toggleMenu">
+      <AppIcon name="add" :size="14" alt="新建" />
+    </button>
     <div v-if="showMenu" class="add-menu">
-      <button type="button" @click="choose('folder', $event)">📁 新建文件夹</button>
-      <button type="button" @click="choose('note', $event)">📄 新建笔记</button>
+      <button type="button" @click="choose('folder', $event)">
+        <AppIcon name="folder" :size="16" alt="" /> 新建文件夹
+      </button>
+      <button type="button" @click="choose('note', $event)">
+        <AppIcon name="note" :size="16" alt="" /> 新建笔记
+      </button>
     </div>
   </div>
 </template>
@@ -53,9 +60,6 @@ onUnmounted(() => document.removeEventListener('click', closeMenu))
   border: 1px solid #cbd5e1;
   border-radius: 4px;
   background: #fff;
-  color: #2563eb;
-  font-size: 16px;
-  line-height: 1;
   cursor: pointer;
   opacity: 0;
   transition: opacity 0.15s, background 0.15s;
@@ -86,7 +90,9 @@ onUnmounted(() => document.removeEventListener('click', closeMenu))
 }
 
 .add-menu button {
-  display: block;
+  display: flex;
+  align-items: center;
+  gap: 8px;
   width: 100%;
   padding: 9px 14px;
   border: none;

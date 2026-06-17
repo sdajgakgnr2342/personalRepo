@@ -33,6 +33,24 @@ const routes = [
     meta: { title: '帮助', requiresAuth: true },
   },
   {
+    path: '/user',
+    name: 'UserCenter',
+    component: () => import('@/views/UserCenter.vue'),
+    meta: { title: '用户中心', requiresAuth: true },
+  },
+  {
+    path: '/user/profile',
+    name: 'UserProfile',
+    component: () => import('@/views/UserProfile.vue'),
+    meta: { title: '个人资料', requiresAuth: true },
+  },
+  {
+    path: '/user/password',
+    name: 'UserPassword',
+    component: () => import('@/views/UserPassword.vue'),
+    meta: { title: '修改密码', requiresAuth: true },
+  },
+  {
     path: '/:pathMatch(.*)*',
     name: 'NotFound',
     component: () => import('@/views/NotFound.vue'),

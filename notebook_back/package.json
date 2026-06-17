@@ -16,12 +16,6 @@
   "engines": {
     "node": ">=16"
   },
-  "overrides": {
-    "minimatch": "9.0.5"
-  },
-  "resolutions": {
-    "minimatch": "9.0.5"
-  },
   "dependencies": {
     "bcryptjs": "^2.4.3",
     "cors": "^2.8.6",

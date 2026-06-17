@@ -11,6 +11,69 @@ async function repairOrphanItems(userId) {
   );
 }
 
+const NOT_IN_TRASH = `NOT EXISTS (
+  SELECT 1 FROM nb_item p
+  WHERE p.id = n.parent_id AND p.user_id = n.user_id AND p.status = 'trash'
+)`;
+
+function formatDayKey(date) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+function buildLast7DaySeries(rows) {
+  const map = new Map();
+  for (const row of rows) {
+    const day = row.day instanceof Date ? formatDayKey(row.day) : String(row.day).slice(0, 10);
+    map.set(day, Number(row.cnt) || 0);
+  }
+  const series = [];
+  for (let i = 6; i >= 0; i -= 1) {
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    d.setDate(d.getDate() - i);
+    series.push(map.get(formatDayKey(d)) || 0);
+  }
+  return series;
+}
+
+async function countNotes(userId, { status, dateField, startDays, endDays } = {}) {
+  let sql = `SELECT COUNT(*) AS cnt FROM nb_item n
+    WHERE n.user_id = ? AND n.item_type = 'note' AND n.deleted_at IS NULL AND ${NOT_IN_TRASH}`;
+  const params = [userId];
+  if (status) {
+    sql += ' AND n.status = ?';
+    params.push(status);
+  }
+  if (dateField && startDays != null) {
+    if (endDays != null) {
+      sql += ` AND n.${dateField} >= DATE_SUB(NOW(), INTERVAL ? DAY) AND n.${dateField} < DATE_SUB(NOW(), INTERVAL ? DAY)`;
+      params.push(startDays, endDays);
+    } else {
+      sql += ` AND n.${dateField} >= DATE_SUB(NOW(), INTERVAL ? DAY)`;
+      params.push(startDays);
+    }
+  }
+  const [[row]] = await db.query(sql, params);
+  return row.cnt;
+}
+
+async function queryDailySeries(userId, { status, dateField = 'updated_at' } = {}) {
+  let sql = `SELECT DATE(n.${dateField}) AS day, COUNT(*) AS cnt FROM nb_item n
+    WHERE n.user_id = ? AND n.item_type = 'note' AND n.deleted_at IS NULL AND ${NOT_IN_TRASH}
+      AND n.${dateField} >= DATE_SUB(CURDATE(), INTERVAL 6 DAY)`;
+  const params = [userId];
+  if (status) {
+    sql += ' AND n.status = ?';
+    params.push(status);
+  }
+  sql += ` GROUP BY DATE(n.${dateField}) ORDER BY day ASC`;
+  const [rows] = await db.query(sql, params);
+  return buildLast7DaySeries(rows);
+}
+
 const getStats = async (req, res) => {
   try {
     const userId = req.user.userId;
@@ -61,14 +124,46 @@ const getStats = async (req, res) => {
         wordCount: n.word_count,
         lastSavedAt: n.last_saved_at,
         updatedAt: n.updated_at,
+        status: 'normal',
       });
       if (recentNotes.length >= 10) break;
     }
 
+    const [
+      updatesThisWeek,
+      newNotesThisWeek,
+      draftUpdatesThisWeek,
+      draftUpdatesLastWeek,
+      updatesLastWeek,
+      noteDailyTrend,
+      draftDailyTrend,
+      updateDailyTrend,
+    ] = await Promise.all([
+      countNotes(userId, { status: 'normal', dateField: 'updated_at', startDays: 7 }),
+      countNotes(userId, { status: 'normal', dateField: 'created_at', startDays: 7 }),
+      countNotes(userId, { status: 'draft', dateField: 'updated_at', startDays: 7 }),
+      countNotes(userId, { status: 'draft', dateField: 'updated_at', startDays: 14, endDays: 7 }),
+      countNotes(userId, { status: 'normal', dateField: 'updated_at', startDays: 14, endDays: 7 }),
+      queryDailySeries(userId, { status: 'normal', dateField: 'created_at' }),
+      queryDailySeries(userId, { status: 'draft', dateField: 'updated_at' }),
+      queryDailySeries(userId, { status: 'normal', dateField: 'updated_at' }),
+    ]);
+
     return ok(res, {
       noteCount: noteCount.cnt,
       draftCount: draftCount.cnt,
+      weeklyUpdateCount: updatesThisWeek,
       recentNotes,
+      trends: {
+        notes: noteDailyTrend,
+        drafts: draftDailyTrend,
+        updates: updateDailyTrend,
+      },
+      deltas: {
+        noteCount: newNotesThisWeek,
+        draftCount: draftUpdatesThisWeek - draftUpdatesLastWeek,
+        weeklyUpdates: updatesThisWeek - updatesLastWeek,
+      },
     });
   } catch (error) {
     console.error('getStats error:', error);

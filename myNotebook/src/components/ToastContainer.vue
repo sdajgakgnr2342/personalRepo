@@ -1,7 +1,15 @@
 <script setup>
 import { useToastState, dismiss } from '@/utils/toast'
+import AppIcon from '@/components/AppIcon.vue'
 
 const state = useToastState()
+
+const toastIconMap = {
+  success: 'success',
+  error: 'error',
+  warning: 'warning',
+  info: 'info',
+}
 </script>
 
 <template>
@@ -14,9 +22,7 @@ const state = useToastState()
         :class="item.type"
         @click="dismiss(item.id)"
       >
-        <span class="toast-icon">
-          {{ item.type === 'success' ? '✓' : item.type === 'error' ? '✕' : item.type === 'warning' ? '!' : 'ℹ' }}
-        </span>
+        <AppIcon :name="toastIconMap[item.type] || 'info'" :size="20" class="toast-icon" alt="" />
         <span class="toast-message">{{ item.message }}</span>
       </div>
     </TransitionGroup>
@@ -74,34 +80,7 @@ const state = useToastState()
 
 .toast-icon {
   flex-shrink: 0;
-  width: 20px;
-  height: 20px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 50%;
-  font-size: 12px;
-  font-weight: bold;
-}
-
-.success .toast-icon {
-  background: #22c55e;
-  color: #fff;
-}
-
-.error .toast-icon {
-  background: #ef4444;
-  color: #fff;
-}
-
-.warning .toast-icon {
-  background: #f59e0b;
-  color: #fff;
-}
-
-.info .toast-icon {
-  background: #3b82f6;
-  color: #fff;
+  margin-top: 1px;
 }
 
 .toast-message {
@@ -122,11 +101,19 @@ const state = useToastState()
 
 @media (max-width: 768px) {
   .toast-container {
-    top: auto;
-    bottom: 16px;
-    left: 16px;
-    right: 16px;
-    max-width: none;
+    top: 10%;
+    bottom: auto;
+    left: 50%;
+    right: auto;
+    transform: translateX(-50%);
+    align-items: center;
+    width: calc(100% - 32px);
+    max-width: min(420px, calc(100vw - 32px));
+  }
+
+  .toast-enter-from,
+  .toast-leave-to {
+    transform: translateY(-12px);
   }
 }
 </style>

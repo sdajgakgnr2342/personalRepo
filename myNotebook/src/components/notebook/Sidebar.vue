@@ -1,38 +1,32 @@
 <script setup>
 import { ref, computed, watch } from 'vue'
+import { useRouter, useRoute } from 'vue-router'
 import { useNotebookStore } from '@/stores/notebook'
-import FolderTree from './FolderTree.vue'
-import FolderAddMenu from './FolderAddMenu.vue'
-import TreeContextMenu from './TreeContextMenu.vue'
+import AppIcon from '@/components/AppIcon.vue'
+import EmptyState from '@/components/EmptyState.vue'
+import { getContentTypeIcon } from '@/utils/icons'
 
-const emit = defineEmits(['select-item', 'select-trash-item', 'unlock-folder', 'show-stats', 'switch-mode', 'create-folder', 'create-note', 'delete-item'])
-const notebookStore = useNotebookStore()
+const emit = defineEmits(['select-item', 'select-trash-item', 'show-stats', 'switch-mode', 'close-mobile'])
 
-defineProps({
+const props = defineProps({
   mobileOpen: { type: Boolean, default: false },
 })
 
+const notebookStore = useNotebookStore()
+const router = useRouter()
+const route = useRoute()
+
 const collapsed = ref(localStorage.getItem('sidebarCollapsed') === '1')
-const activeId = computed(() => notebookStore.currentItem?.id)
-const rootParentId = computed(() => notebookStore.getRootFolderId())
 
 watch(collapsed, (val) => {
   localStorage.setItem('sidebarCollapsed', val ? '1' : '0')
 })
 
-const ctxMenu = ref({
-  visible: false,
-  x: 0,
-  y: 0,
-  parentId: null,
-  parentName: '',
-  itemId: null,
-  itemName: '',
-  itemType: '',
-  isLocked: false,
-})
-
-function toggleCollapse() {
+function handleCollapseClick() {
+  if (props.mobileOpen) {
+    emit('close-mobile')
+    return
+  }
   collapsed.value = !collapsed.value
 }
 
@@ -47,69 +41,19 @@ function handleShowStats() {
   emit('show-stats')
 }
 
-function openContextMenu(e, payload) {
-  e.preventDefault()
-  e.stopPropagation()
-  ctxMenu.value = {
-    visible: true,
-    x: e.clientX,
-    y: e.clientY,
-    parentId: payload.parentId,
-    parentName: payload.parentName,
-    itemId: payload.itemId || null,
-    itemName: payload.itemName || '',
-    itemType: payload.itemType || '',
-    isLocked: !!payload.isLocked,
-  }
+function goHelp() {
+  emit('close-mobile')
+  router.push('/help')
 }
 
-function closeContextMenu() {
-  ctxMenu.value.visible = false
+function goAbout() {
+  emit('close-mobile')
+  router.push('/about')
 }
 
-function handleRootContextMenu(e) {
-  if (notebookStore.sidebarMode !== 'tree' || collapsed.value) return
-  openContextMenu(e, {
-    parentId: rootParentId.value,
-    parentName: '我的笔记',
-  })
-}
-
-function handleTreeContextMenu(e, payload) {
-  openContextMenu(e, payload)
-}
-
-function handleRootCreateFolder() {
-  emit('create-folder', { parentId: rootParentId.value, parentName: '我的笔记' })
-}
-
-function handleRootCreateNote() {
-  emit('create-note', { parentId: rootParentId.value, parentName: '我的笔记' })
-}
-
-function handleCtxCreateFolder() {
-  emit('create-folder', {
-    parentId: ctxMenu.value.parentId,
-    parentName: ctxMenu.value.parentName,
-  })
-  closeContextMenu()
-}
-
-function handleCtxCreateNote() {
-  emit('create-note', {
-    parentId: ctxMenu.value.parentId,
-    parentName: ctxMenu.value.parentName,
-  })
-  closeContextMenu()
-}
-
-function handleCtxDelete() {
-  emit('delete-item', {
-    id: ctxMenu.value.itemId,
-    name: ctxMenu.value.itemName,
-    itemType: ctxMenu.value.itemType,
-  })
-  closeContextMenu()
+function goUserCenter() {
+  emit('close-mobile')
+  router.push('/user')
 }
 </script>
 
@@ -118,56 +62,42 @@ function handleCtxDelete() {
     <button
       type="button"
       class="collapse-btn"
-      :title="collapsed ? '展开菜单' : '收起菜单'"
-      @click="toggleCollapse"
+      :title="mobileOpen ? '关闭菜单' : (collapsed ? '展开菜单' : '收起菜单')"
+      @click="handleCollapseClick"
     >
-      <span class="collapse-icon">{{ collapsed ? '»' : '«' }}</span>
-      <span v-show="!collapsed" class="collapse-label">收起</span>
+      <AppIcon
+        :name="mobileOpen ? 'close' : (collapsed ? 'sidebar-collapse' : 'sidebar-expand')"
+        :size="16"
+        alt=""
+      />
+      <span v-if="mobileOpen" class="collapse-label">关闭</span>
+      <span v-else v-show="!collapsed" class="collapse-label">收起</span>
     </button>
 
     <div class="sidebar-inner">
       <section class="nav-section">
         <div
-          class="nav-item stats-menu"
+          class="nav-item home-menu"
           :class="{ active: notebookStore.sidebarMode === 'stats' }"
-          title="统计"
+          title="首页"
           @click="handleShowStats"
         >
-          <span class="nav-icon">📊</span>
-          <span v-show="!collapsed" class="nav-label">统计</span>
+          <AppIcon name="home" :size="20" alt="首页" class="nav-icon" />
+          <span v-show="!collapsed" class="nav-label">首页</span>
         </div>
-      </section>
-
-      <section class="nav-section">
-        <div
-          class="nav-header"
-          :class="{ active: notebookStore.sidebarMode === 'tree' }"
-          title="我的笔记"
-          @click="switchMode('tree')"
-          @contextmenu="handleRootContextMenu"
-        >
-          <span class="nav-icon">📂</span>
-          <span v-show="!collapsed" class="nav-header-label">我的笔记</span>
-          <FolderAddMenu
-            v-if="!collapsed && notebookStore.sidebarMode === 'tree'"
-            @create-folder="handleRootCreateFolder"
-            @create-note="handleRootCreateNote"
-          />
-        </div>
-        <FolderTree
-          v-if="!collapsed && notebookStore.sidebarMode === 'tree'"
-          :nodes="notebookStore.getTreeNodes()"
-          :active-id="activeId"
-          @select="(id) => emit('select-item', id)"
-          @unlock="(node) => emit('unlock-folder', node)"
-          @create-folder="(payload) => emit('create-folder', payload)"
-          @create-note="(payload) => emit('create-note', payload)"
-          @delete-item="(payload) => emit('delete-item', payload)"
-          @context-menu="handleTreeContextMenu"
-        />
       </section>
 
       <section class="nav-section shortcuts">
+        <div
+          class="nav-item"
+          :class="{ active: notebookStore.sidebarMode === 'tree' }"
+          title="我的笔记"
+          @click="switchMode('tree')"
+        >
+          <AppIcon name="my-notes" :size="20" alt="我的笔记" class="nav-icon" />
+          <span v-show="!collapsed" class="nav-label">我的笔记</span>
+        </div>
+
         <div
           class="nav-item"
           :class="{ active: notebookStore.sidebarMode === 'drafts' }"
@@ -175,7 +105,7 @@ function handleCtxDelete() {
           @click="switchMode('drafts')"
         >
           <span class="nav-icon-wrap">
-            <span class="nav-icon">📝</span>
+            <AppIcon name="drafts" :size="20" alt="草稿箱" class="nav-icon" />
             <span
               v-if="collapsed && notebookStore.stats.draftCount"
               class="icon-badge"
@@ -194,7 +124,11 @@ function handleCtxDelete() {
           >
             {{ item.name }}
           </div>
-          <div v-if="!notebookStore.drafts.length" class="empty-tip">暂无草稿</div>
+          <EmptyState
+            v-if="!notebookStore.drafts.length"
+            size="sm"
+            title="暂无草稿"
+          />
         </template>
 
         <div
@@ -203,7 +137,7 @@ function handleCtxDelete() {
           title="收藏夹"
           @click="switchMode('favorites')"
         >
-          <span class="nav-icon">⭐</span>
+          <AppIcon name="favorites" :size="20" alt="收藏夹" class="nav-icon" />
           <span v-show="!collapsed" class="nav-label">收藏夹</span>
         </div>
 
@@ -216,7 +150,11 @@ function handleCtxDelete() {
           >
             {{ item.name }}
           </div>
-          <div v-if="!notebookStore.favorites.length" class="empty-tip">暂无收藏</div>
+          <EmptyState
+            v-if="!notebookStore.favorites.length"
+            size="sm"
+            title="暂无收藏"
+          />
         </template>
 
         <div
@@ -225,7 +163,7 @@ function handleCtxDelete() {
           title="垃圾箱"
           @click="switchMode('trash')"
         >
-          <span class="nav-icon">🗑️</span>
+          <AppIcon name="trash" :size="20" alt="垃圾箱" class="nav-icon" />
           <span v-show="!collapsed" class="nav-label">垃圾箱</span>
         </div>
 
@@ -237,28 +175,47 @@ function handleCtxDelete() {
             :class="{ active: notebookStore.trashSelectedItem?.id === item.id }"
             @click="emit('select-trash-item', item)"
           >
-            <span class="trash-item-icon">{{ item.itemType === 'folder' ? '📁' : '📄' }}</span>
+            <AppIcon :name="getContentTypeIcon(item.itemType)" :size="14" alt="" class="trash-item-icon" />
             {{ item.name }}
           </div>
-          <div v-if="!notebookStore.trash.length" class="empty-tip">垃圾箱为空</div>
+          <EmptyState
+            v-if="!notebookStore.trash.length"
+            size="sm"
+            title="垃圾箱为空"
+          />
         </template>
       </section>
     </div>
 
-    <TreeContextMenu
-      :visible="ctxMenu.visible"
-      :x="ctxMenu.x"
-      :y="ctxMenu.y"
-      :target-name="ctxMenu.parentName"
-      :item-id="ctxMenu.itemId"
-      :item-name="ctxMenu.itemName"
-      :item-type="ctxMenu.itemType"
-      :can-create="!ctxMenu.isLocked"
-      @create-folder="handleCtxCreateFolder"
-      @create-note="handleCtxCreateNote"
-      @delete-item="handleCtxDelete"
-      @close="closeContextMenu"
-    />
+    <section class="nav-section nav-footer">
+      <div
+        class="nav-item"
+        :class="{ active: route.path.startsWith('/user') }"
+        title="用户中心"
+        @click="goUserCenter"
+      >
+        <AppIcon name="user" :size="20" alt="用户中心" class="nav-icon" />
+        <span v-show="!collapsed" class="nav-label">用户中心</span>
+      </div>
+      <div
+        class="nav-item"
+        :class="{ active: route.path === '/help' }"
+        title="帮助"
+        @click="goHelp"
+      >
+        <AppIcon name="help" :size="20" alt="帮助" class="nav-icon" />
+        <span v-show="!collapsed" class="nav-label">帮助</span>
+      </div>
+      <div
+        class="nav-item"
+        :class="{ active: route.path === '/about' }"
+        title="关于"
+        @click="goAbout"
+      >
+        <AppIcon name="about" :size="20" alt="关于" class="nav-icon" />
+        <span v-show="!collapsed" class="nav-label">关于</span>
+      </div>
+    </section>
   </aside>
 </template>
 
@@ -320,7 +277,7 @@ function handleCtxDelete() {
   border-bottom: none;
 }
 
-.stats-menu {
+.home-menu {
   margin-top: 0;
 }
 
@@ -339,41 +296,6 @@ function handleCtxDelete() {
   cursor: pointer;
   flex-shrink: 0;
   transition: background 0.15s, color 0.15s;
-}
-
-.nav-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 12px 8px 16px;
-  font-size: 14px;
-  font-weight: 500;
-  cursor: pointer;
-  color: #374151;
-}
-
-.sidebar.collapsed .nav-header {
-  justify-content: center;
-  padding: 10px 8px;
-}
-
-.nav-header:hover {
-  background: #f3f4f6;
-}
-
-.nav-header:hover :deep(.add-btn) {
-  opacity: 1;
-}
-
-.nav-header.active {
-  background: #dbeafe;
-  color: #1d4ed8;
-}
-
-.nav-header-label {
-  flex: 1;
-  min-width: 0;
-  white-space: nowrap;
 }
 
 .nav-item {
@@ -410,10 +332,6 @@ function handleCtxDelete() {
 
 .nav-icon {
   flex-shrink: 0;
-  font-size: 18px;
-  line-height: 1;
-  width: 22px;
-  text-align: center;
 }
 
 .nav-icon-wrap {
@@ -477,13 +395,6 @@ function handleCtxDelete() {
 
 .trash-item-icon {
   flex-shrink: 0;
-  font-size: 12px;
-}
-
-.empty-tip {
-  padding: 8px 32px;
-  font-size: 12px;
-  color: #9ca3af;
 }
 
 .collapse-btn:hover {
@@ -495,12 +406,14 @@ function handleCtxDelete() {
   padding: 12px 8px;
 }
 
-.collapse-icon {
-  font-size: 16px;
-  line-height: 1;
-}
-
 .collapse-label {
   white-space: nowrap;
+}
+
+.nav-footer {
+  flex-shrink: 0;
+  border-top: 1px solid #e5e7eb;
+  border-bottom: none;
+  margin-top: auto;
 }
 </style>

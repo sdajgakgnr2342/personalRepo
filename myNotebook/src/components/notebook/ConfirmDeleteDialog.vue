@@ -1,5 +1,6 @@
 <script setup>
 import { ref, watch, computed } from 'vue'
+import AppIcon from '@/components/AppIcon.vue'
 
 const props = defineProps({
   visible: { type: Boolean, default: false },
@@ -60,7 +61,10 @@ function handleConfirm() {
   <div v-if="visible" class="dialog-overlay" @click.self="handleClose">
     <div class="dialog">
       <template v-if="step === 1">
-        <h3>⚠️ 确认{{ permanent ? '永久删除' : '删除' }}</h3>
+        <h3 class="dialog-title">
+          <AppIcon name="warning" :size="20" alt="" />
+          确认{{ permanent ? '永久删除' : '删除' }}
+        </h3>
         <p class="main-text">
           确定要{{ permanent ? '永久删除' : '删除' }}{{ typeLabel }}「<strong>{{ itemName }}</strong>」吗？
         </p>
@@ -90,7 +94,10 @@ function handleConfirm() {
       </template>
 
       <template v-else-if="needsPassword">
-        <h3>🔒 验证密码</h3>
+        <h3 class="dialog-title">
+          <AppIcon name="lock" :size="20" alt="" />
+          验证密码
+        </h3>
         <p class="main-text">
           {{ permanent ? '永久删除' : '删除' }}加密文件夹前，请输入密码以确认身份。
         </p>
@@ -113,7 +120,10 @@ function handleConfirm() {
       </template>
 
       <template v-else>
-        <h3>{{ permanent ? '⚠️ 二次确认' : '🗑️ 二次确认' }}</h3>
+        <h3 class="dialog-title">
+          <AppIcon :name="permanent ? 'warning' : 'delete'" :size="20" alt="" />
+          二次确认
+        </h3>
         <p class="main-text">
           请再次确认：{{ permanent ? '永久删除' : '将' }}「<strong>{{ itemName }}</strong>」{{ permanent ? '？' : '移入垃圾箱？' }}
         </p>
@@ -148,7 +158,11 @@ function handleConfirm() {
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.18);
 }
 
-.dialog h3 {
+.dialog h3,
+.dialog-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   margin: 0 0 16px;
   font-size: 18px;
   color: #1e293b;

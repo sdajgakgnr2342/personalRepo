@@ -1,6 +1,7 @@
 <script setup>
 import { ref } from 'vue'
 import { unlockFolder } from '@/api/item'
+import AppIcon from '@/components/AppIcon.vue'
 
 const props = defineProps({
   folderId: { type: Number, required: true },
@@ -40,11 +41,14 @@ async function handleUnlock() {
 </script>
 
 <template>
-  <div class="unlock-overlay" @click.self="handleClose">
-    <div class="unlock-dialog">
+  <Teleport to="body">
+    <div class="unlock-overlay" @click.self="handleClose">
+      <div class="unlock-dialog">
       <div class="dialog-header">
-        <h3>🔒 加密文件夹</h3>
-        <button type="button" class="close-btn" title="关闭" @click="handleClose">×</button>
+        <h3><AppIcon name="lock" :size="20" alt="" /> 加密文件夹</h3>
+        <button type="button" class="close-btn" title="关闭" @click="handleClose">
+          <AppIcon name="close" :size="16" alt="关闭" />
+        </button>
       </div>
       <p>「{{ folderName }}」需要密码才能访问</p>
       <p class="hint">解锁后 {{ unlockMinutes }} 分钟内再次查看无需重复输入密码</p>
@@ -62,8 +66,9 @@ async function handleUnlock() {
           {{ loading ? '验证中...' : '解锁' }}
         </button>
       </div>
+      </div>
     </div>
-  </div>
+  </Teleport>
 </template>
 
 <style scoped>
@@ -74,14 +79,19 @@ async function handleUnlock() {
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 1000;
+  z-index: 6000;
+  padding: 24px;
+  box-sizing: border-box;
 }
 
 .unlock-dialog {
   background: #fff;
   padding: 24px;
   border-radius: 12px;
-  width: 360px;
+  width: 100%;
+  max-width: 300px;
+  box-sizing: border-box;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
 }
 
 .dialog-header {
@@ -92,6 +102,9 @@ async function handleUnlock() {
 }
 
 .dialog-header h3 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   margin: 0;
   font-size: 18px;
 }
@@ -106,9 +119,6 @@ async function handleUnlock() {
   border: none;
   border-radius: 6px;
   background: transparent;
-  color: #94a3b8;
-  font-size: 22px;
-  line-height: 1;
   cursor: pointer;
 }
 

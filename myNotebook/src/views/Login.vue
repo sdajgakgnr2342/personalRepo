@@ -45,7 +45,6 @@ async function handleSubmit() {
   <div class="login-page">
     <form class="login-form" @submit.prevent="handleSubmit">
       <h1>{{ isRegister ? '注册' : '登录' }}</h1>
-      <p class="hint">演示账号：demo / 123456</p>
 
       <label v-if="isRegister">
         昵称
@@ -101,13 +100,6 @@ async function handleSubmit() {
   margin: 0 0 4px;
   text-align: center;
   font-size: 22px;
-}
-
-.hint {
-  text-align: center;
-  font-size: 13px;
-  color: #9ca3af;
-  margin-bottom: 4px;
 }
 
 label {

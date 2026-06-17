@@ -29,6 +29,20 @@ export const useUserStore = defineStore('user', () => {
     return userInfo.value
   }
 
+  async function updateProfile(payload) {
+    userInfo.value = await authApi.updateProfile(payload)
+    return userInfo.value
+  }
+
+  async function uploadAvatar(file) {
+    userInfo.value = await authApi.uploadAvatar(file)
+    return userInfo.value
+  }
+
+  async function changePassword(payload) {
+    await authApi.changePassword(payload)
+  }
+
   async function logout() {
     try {
       await authApi.logout()
@@ -40,5 +54,5 @@ export const useUserStore = defineStore('user', () => {
     removeToken()
   }
 
-  return { token, userInfo, login, register, fetchUserInfo, logout }
+  return { token, userInfo, login, register, fetchUserInfo, updateProfile, uploadAvatar, changePassword, logout }
 })

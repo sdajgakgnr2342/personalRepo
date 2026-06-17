@@ -1,6 +1,8 @@
 <script setup>
 import { computed } from 'vue'
 import { useNotebookStore } from '@/stores/notebook'
+import AppIcon from '@/components/AppIcon.vue'
+import { getContentTypeIcon } from '@/utils/icons'
 
 const emit = defineEmits(['restore', 'permanent-delete'])
 const notebookStore = useNotebookStore()
@@ -20,7 +22,7 @@ function typeLabel(type) {
 <template>
   <div v-if="item" class="trash-panel">
     <div class="trash-header">
-      <span class="trash-icon">{{ item.itemType === 'folder' ? '📁' : '📄' }}</span>
+      <AppIcon :name="getContentTypeIcon(item.itemType)" :size="36" class="trash-icon" alt="" />
       <div class="trash-title-wrap">
         <h2>{{ item.name }}</h2>
         <span class="type-badge">{{ typeLabel(item.itemType) }}</span>
@@ -37,10 +39,10 @@ function typeLabel(type) {
 
     <div class="actions">
       <button type="button" class="btn-restore" @click="emit('restore', item)">
-        ↩ 恢复
+        <AppIcon name="restore" :size="16" alt="" /> 恢复
       </button>
       <button type="button" class="btn-danger" @click="emit('permanent-delete', item)">
-        🗑 永久删除
+        <AppIcon name="delete-permanent" :size="16" alt="" /> 永久删除
       </button>
     </div>
   </div>
@@ -61,8 +63,7 @@ function typeLabel(type) {
 }
 
 .trash-icon {
-  font-size: 36px;
-  line-height: 1;
+  flex-shrink: 0;
 }
 
 .trash-title-wrap h2 {
@@ -117,6 +118,9 @@ function typeLabel(type) {
 
 .btn-restore,
 .btn-danger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   padding: 10px 24px;
   border-radius: 8px;
   font-size: 14px;

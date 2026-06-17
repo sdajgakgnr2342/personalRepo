@@ -1,5 +1,6 @@
 <script setup>
 import { onMounted, onUnmounted } from 'vue'
+import AppIcon from '@/components/AppIcon.vue'
 
 defineProps({
   visible: { type: Boolean, default: false },
@@ -38,15 +39,22 @@ onUnmounted(() => document.removeEventListener('keydown', onKeydown))
       >
         <div v-if="targetName && canCreate" class="ctx-title">在「{{ targetName }}」下新建</div>
         <template v-if="canCreate">
-          <button type="button" @click="emit('create-folder')">📁 新建文件夹</button>
-          <button type="button" @click="emit('create-note')">📄 新建笔记</button>
+          <button type="button" @click="emit('create-folder')">
+            <AppIcon name="folder" :size="16" alt="" /> 新建文件夹
+          </button>
+          <button type="button" @click="emit('create-note')">
+            <AppIcon name="note" :size="16" alt="" /> 新建笔记
+          </button>
         </template>
-        <div v-else-if="targetName" class="ctx-title locked-tip">🔒 文件夹已锁定，请先解锁</div>
+        <div v-else-if="targetName" class="ctx-title locked-tip">
+          <AppIcon name="lock" :size="16" alt="" /> 文件夹已锁定，请先解锁
+        </div>
 
         <template v-if="itemId">
           <div class="ctx-divider" />
           <button type="button" class="danger" @click="emit('delete-item')">
-            🗑️ 删除{{ itemType === 'folder' ? '文件夹' : '笔记' }}「{{ itemName }}」
+            <AppIcon name="delete" :size="16" alt="" />
+            删除{{ itemType === 'folder' ? '文件夹' : '笔记' }}「{{ itemName }}」
           </button>
         </template>
       </div>
@@ -82,6 +90,9 @@ onUnmounted(() => document.removeEventListener('keydown', onKeydown))
 }
 
 .ctx-title.locked-tip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   color: #b45309;
   border-bottom: none;
   margin-bottom: 0;
@@ -95,7 +106,9 @@ onUnmounted(() => document.removeEventListener('keydown', onKeydown))
 }
 
 .ctx-menu button {
-  display: block;
+  display: flex;
+  align-items: center;
+  gap: 8px;
   width: 100%;
   padding: 9px 14px;
   border: none;

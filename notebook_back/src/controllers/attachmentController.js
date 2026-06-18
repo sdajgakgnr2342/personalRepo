@@ -2,14 +2,15 @@ const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
 const db = require('../config/db');
-const { ok, fail, checkItemAccess } = require('../utils/helpers');
+const uploadConfig = require('../config/upload');
+const oss = require('../utils/oss');
+const { ok, fail, checkItemAccess, decodeUploadFilename } = require('../utils/helpers');
 const {
   mapAttachmentRow,
   verifySignedAttachmentAccess,
 } = require('../utils/attachmentAccess');
 
 const uploadDir = path.join(__dirname, '../../uploads');
-if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
 
 const ALLOWED_MIMES = new Set([
   'image/jpeg',
@@ -28,17 +29,9 @@ const ALLOWED_MIMES = new Set([
   'application/x-rar-compressed',
 ]);
 
-const storage = multer.diskStorage({
-  destination: (_req, _file, cb) => cb(null, uploadDir),
-  filename: (_req, file, cb) => {
-    const unique = `${Date.now()}-${Math.round(Math.random() * 1e6)}`;
-    cb(null, `${unique}${path.extname(file.originalname)}`);
-  },
-});
-
 const upload = multer({
-  storage,
-  limits: { fileSize: 10 * 1024 * 1024 },
+  storage: multer.memoryStorage(),
+  limits: { fileSize: uploadConfig.maxAttachmentBytes },
   fileFilter: (_req, file, cb) => {
     if (ALLOWED_MIMES.has(file.mimetype)) {
       cb(null, true);
@@ -84,6 +77,18 @@ async function requireNoteAccess(res, userId, item) {
   return true;
 }
 
+function sendLocalFile(res, attachment) {
+  const filePath = path.join(uploadDir, path.basename(attachment.file_path));
+  if (!fs.existsSync(filePath)) return fail(res, '文件不存在', 404, 404);
+
+  res.setHeader('Content-Type', attachment.file_type || 'application/octet-stream');
+  res.setHeader(
+    'Content-Disposition',
+    `inline; filename="${encodeURIComponent(decodeUploadFilename(attachment.file_name))}"`
+  );
+  return res.sendFile(filePath);
+}
+
 const downloadAttachment = async (req, res) => {
   try {
     const attachment = await getAttachmentById(req.params.id);
@@ -122,18 +127,19 @@ const downloadAttachment = async (req, res) => {
         }
       }
     } else if (req.user?.userId) {
-      authorized = attachment.user_id === req.user.userId
-        && await canAccessNoteItem(req.user.userId, item);
+      authorized =
+        attachment.user_id === req.user.userId &&
+        await canAccessNoteItem(req.user.userId, item);
     }
 
     if (!authorized) return fail(res, '无权访问附件', 403, 403);
 
-    const filePath = path.join(uploadDir, path.basename(attachment.file_path));
-    if (!fs.existsSync(filePath)) return fail(res, '文件不存在', 404, 404);
+    const publicUrl = oss.resolvePublicUrl(attachment.file_path);
+    if (publicUrl.startsWith('http://') || publicUrl.startsWith('https://')) {
+      return res.redirect(publicUrl);
+    }
 
-    res.setHeader('Content-Type', attachment.file_type || 'application/octet-stream');
-    res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(attachment.file_name)}"`);
-    return res.sendFile(filePath);
+    return sendLocalFile(res, attachment);
   } catch (error) {
     console.error('downloadAttachment error:', error);
     return fail(res, '下载失败', 500, 500);
@@ -142,9 +148,20 @@ const downloadAttachment = async (req, res) => {
 
 const uploadAttachment = [
   upload.single('file'),
+  (err, req, res, next) => {
+    if (err instanceof multer.MulterError) {
+      if (err.code === 'LIMIT_FILE_SIZE') {
+        return fail(res, `文件大小超出限制（最大 ${uploadConfig.maxAttachmentLabel}）`, 400, 400);
+      }
+      return fail(res, err.message || '上传失败', 400, 400);
+    }
+    if (err) return next(err);
+    return next();
+  },
   async (req, res) => {
     try {
       if (!req.file) return fail(res, '请选择文件');
+      if (!oss.isOssEnabled()) return fail(res, 'OSS 未配置，无法上传文件', 500, 500);
 
       const itemId = req.params.id;
       const [items] = await db.query(
@@ -154,18 +171,35 @@ const uploadAttachment = [
       if (!items.length) return fail(res, '笔记不存在', 404, 404);
       if (!(await requireNoteAccess(res, req.user.userId, items[0]))) return;
 
+      const fileName = decodeUploadFilename(req.file.originalname);
+
+      const objectKey = oss.generateObjectKey(
+        `attachments/${req.user.userId}/${itemId}`,
+        fileName
+      );
+      const uploaded = await oss.uploadBuffer(req.file.buffer, objectKey, {
+        contentType: req.file.mimetype,
+      });
+
       const [result] = await db.query(
         `INSERT INTO nb_attachment (item_id, user_id, file_name, file_path, file_type, file_size)
          VALUES (?, ?, ?, ?, ?, ?)`,
-        [itemId, req.user.userId, req.file.originalname, req.file.filename, req.file.mimetype, req.file.size]
+        [
+          itemId,
+          req.user.userId,
+          fileName,
+          uploaded.objectKey,
+          req.file.mimetype,
+          req.file.size,
+        ]
       );
 
       const row = {
         id: result.insertId,
-        file_name: req.file.originalname,
+        file_name: fileName,
         file_type: req.file.mimetype,
         file_size: req.file.size,
-        file_path: req.file.filename,
+        file_path: uploaded.objectKey,
         created_at: new Date(),
       };
 
@@ -213,9 +247,7 @@ const deleteAttachment = async (req, res) => {
     const item = await getNoteItemForAttachment(rows[0]);
     if (!item || !(await requireNoteAccess(res, req.user.userId, item))) return;
 
-    const filePath = path.join(uploadDir, path.basename(rows[0].file_path));
-    if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
-
+    await oss.deleteStoredFile(rows[0].file_path);
     await db.query('DELETE FROM nb_attachment WHERE id = ?', [req.params.id]);
     return ok(res, null, '已删除');
   } catch (error) {

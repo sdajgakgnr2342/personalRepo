@@ -1,6 +1,8 @@
 <script setup>
-import { ref, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
+import { useUserStore } from '@/stores/user'
+import { resolveAvatarUrl } from '@/utils/avatar'
 import AppIcon from '@/components/AppIcon.vue'
 
 const emit = defineEmits(['search', 'refresh', 'toggle-sidebar'])
@@ -10,6 +12,9 @@ const props = defineProps({
 })
 
 const router = useRouter()
+const userStore = useUserStore()
+
+const avatarUrl = computed(() => resolveAvatarUrl(userStore.userInfo?.avatar))
 
 const searchKeyword = ref('')
 const searchExpanded = ref(false)
@@ -54,6 +59,9 @@ function onDocumentKeydown(e) {
 }
 
 onMounted(() => {
+  if (userStore.token && !userStore.userInfo) {
+    userStore.fetchUserInfo().catch(() => {})
+  }
   document.addEventListener('click', onDocumentClick)
   document.addEventListener('keydown', onDocumentKeydown)
 })
@@ -133,7 +141,14 @@ onUnmounted(() => {
           title="用户中心"
           @click="goUserCenter"
         >
-          <AppIcon name="user" :size="showMenuButton ? 22 : 18" alt="用户中心" /><span class="btn-label"> 用户中心</span>
+          <span
+            class="user-avatar"
+            :class="{ 'user-avatar--mobile': showMenuButton }"
+          >
+            <img v-if="avatarUrl" :src="avatarUrl" alt="用户中心" />
+            <AppIcon v-else name="user" :size="showMenuButton ? 32 : 28" alt="用户中心" />
+          </span>
+          <span class="btn-label"> 用户中心</span>
         </button>
       </div>
     </div>
@@ -264,6 +279,28 @@ onUnmounted(() => {
 
 .user-dropdown {
   position: relative;
+}
+
+.user-avatar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.user-avatar--mobile {
+  width: 32px;
+  height: 32px;
+}
+
+.user-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
 @media (max-width: 768px) {

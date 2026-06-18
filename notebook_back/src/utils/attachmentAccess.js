@@ -1,5 +1,7 @@
 const path = require('path');
-const cryptoUtil = require('./crypto');
+const cryptoUtil = require('../utils/crypto');
+const oss = require('./oss');
+const { decodeUploadFilename } = require('./helpers');
 
 const SIGN_TTL_MS = 60 * 60 * 1000;
 
@@ -34,6 +36,10 @@ function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+function getStableContentUrl(filePath) {
+  return oss.resolvePublicUrl(filePath);
+}
+
 async function rewriteContentAttachmentUrls(db, html, { userId, itemId, shareToken = null } = {}) {
   if (!html || !itemId) return html || '';
 
@@ -45,12 +51,16 @@ async function rewriteContentAttachmentUrls(db, html, { userId, itemId, shareTok
 
   let result = html;
   for (const row of rows) {
-    const filename = path.basename(row.file_path);
     const signedUrl = buildSignedAttachmentUrl(row.id, { userId, shareToken });
+    const stable = getStableContentUrl(row.file_path);
+    const filename = path.basename(row.file_path);
     const patterns = [
       new RegExp(`/uploads/${escapeRegExp(filename)}(?:\\?[^"'\\s>]*)?`, 'g'),
       new RegExp(`/api/items/attachments/${row.id}/file[^"'\\s>]*`, 'g'),
     ];
+    if (stable.startsWith('http://') || stable.startsWith('https://')) {
+      patterns.push(new RegExp(escapeRegExp(stable), 'g'));
+    }
     for (const pattern of patterns) {
       result = result.replace(pattern, signedUrl);
     }
@@ -59,14 +69,14 @@ async function rewriteContentAttachmentUrls(db, html, { userId, itemId, shareTok
 }
 
 function mapAttachmentRow(row, { userId = null, shareToken = null } = {}) {
-  const filename = path.basename(row.file_path);
+  const stableUrl = getStableContentUrl(row.file_path);
   return {
     id: row.id,
-    fileName: row.file_name,
+    fileName: decodeUploadFilename(row.file_name),
     fileType: row.file_type,
     fileSize: row.file_size,
     url: buildSignedAttachmentUrl(row.id, { userId, shareToken }),
-    storagePath: `/uploads/${filename}`,
+    storagePath: stableUrl,
     createdAt: row.created_at,
   };
 }
@@ -82,11 +92,15 @@ async function normalizeContentAttachmentUrls(db, html, userId, itemId) {
 
   let result = html;
   for (const row of rows) {
-    const filename = path.basename(row.file_path);
-    const stable = `/uploads/${filename}`;
+    const stable = getStableContentUrl(row.file_path);
     const patterns = [
       new RegExp(`/api/items/attachments/${row.id}/file[^"'\\s>]*`, 'g'),
     ];
+    if (stable.startsWith('http://') || stable.startsWith('https://')) {
+      patterns.push(new RegExp(escapeRegExp(stable), 'g'));
+    } else {
+      patterns.push(new RegExp(`/uploads/${escapeRegExp(path.basename(row.file_path))}(?:\\?[^"'\\s>]*)?`, 'g'));
+    }
     for (const pattern of patterns) {
       result = result.replace(pattern, stable);
     }

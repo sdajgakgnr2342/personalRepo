@@ -9,11 +9,25 @@ export function useToastState() {
 
 export function toast(message, type = 'info', duration = 3000) {
   const id = ++idCounter
-  state.toasts.push({ id, message, type })
+  state.toasts.push({ id, message, type, progress: null })
   if (duration > 0) {
     setTimeout(() => dismiss(id), duration)
   }
   return id
+}
+
+export function toastProgress(message, progress = 0) {
+  const id = ++idCounter
+  state.toasts.push({ id, message, type: 'progress', progress, duration: 0 })
+  return id
+}
+
+export function updateToast(id, { message, progress, type } = {}) {
+  const item = state.toasts.find((t) => t.id === id)
+  if (!item) return
+  if (message !== undefined) item.message = message
+  if (progress !== undefined) item.progress = progress
+  if (type !== undefined) item.type = type
 }
 
 export function toastSuccess(message, duration) {

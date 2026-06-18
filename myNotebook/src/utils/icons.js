@@ -29,6 +29,7 @@ import deleteIcon from '@/assets/toolbar/delete.png'
 import restore from '@/assets/toolbar/restore.png'
 import deletePermanent from '@/assets/toolbar/delete-permanent.png'
 import clear from '@/assets/toolbar/clear.png'
+import caogao from '@/assets/toolbar/caogao.png'
 
 import alignLeft from '@/assets/format/align-left.png'
 import alignCenter from '@/assets/format/align-center.png'
@@ -87,6 +88,7 @@ export const icons = {
   restore,
   'delete-permanent': deletePermanent,
   clear,
+  caogao,
   'align-left': alignLeft,
   'align-center': alignCenter,
   'align-right': alignRight,

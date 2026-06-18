@@ -20,10 +20,28 @@ const toastIconMap = {
         :key="item.id"
         class="toast-item"
         :class="item.type"
-        @click="dismiss(item.id)"
+        @click="item.type !== 'progress' && dismiss(item.id)"
       >
-        <AppIcon :name="toastIconMap[item.type] || 'info'" :size="20" class="toast-icon" alt="" />
-        <span class="toast-message">{{ item.message }}</span>
+        <AppIcon
+          v-if="item.type !== 'progress'"
+          :name="toastIconMap[item.type] || 'info'"
+          :size="20"
+          class="toast-icon"
+          alt=""
+        />
+        <div class="toast-body">
+          <span class="toast-message">{{ item.message }}</span>
+          <div v-if="item.type === 'progress'" class="toast-progress-wrap">
+            <div class="toast-progress-track">
+              <div
+                class="toast-progress-bar"
+                :class="{ indeterminate: item.progress < 0 }"
+                :style="item.progress >= 0 ? { width: `${item.progress}%` } : undefined"
+              />
+            </div>
+            <span v-if="item.progress >= 0" class="toast-progress-text">{{ item.progress }}%</span>
+          </div>
+        </div>
       </div>
     </TransitionGroup>
   </div>
@@ -83,9 +101,60 @@ const toastIconMap = {
   margin-top: 1px;
 }
 
-.toast-message {
+.toast-body {
   flex: 1;
+  min-width: 0;
+}
+
+.toast-message {
+  display: block;
   word-break: break-word;
+}
+
+.toast-progress-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.toast-progress-track {
+  flex: 1;
+  height: 4px;
+  background: #e5e7eb;
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.toast-progress-bar {
+  height: 100%;
+  background: #3b82f6;
+  border-radius: 999px;
+  transition: width 0.2s ease;
+}
+
+.toast-progress-bar.indeterminate {
+  width: 40% !important;
+  animation: toast-progress-indeterminate 1.2s ease-in-out infinite;
+}
+
+.toast-progress-text {
+  flex-shrink: 0;
+  font-size: 12px;
+  color: #6b7280;
+  min-width: 36px;
+  text-align: right;
+}
+
+@keyframes toast-progress-indeterminate {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(250%); }
+}
+
+.toast-item.progress {
+  border-color: #bfdbfe;
+  background: #eff6ff;
+  cursor: default;
 }
 
 .toast-enter-active,

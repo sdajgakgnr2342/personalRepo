@@ -5,6 +5,7 @@ import { useUserStore } from '@/stores/user'
 import UserSettingShell from '@/components/user/UserSettingShell.vue'
 import SettingGroup from '@/components/user/SettingGroup.vue'
 import { toastSuccess, toastError } from '@/utils/toast'
+import { MAX_AVATAR_SIZE, MAX_AVATAR_SIZE_LABEL } from '@/config/upload'
 import { resolveAvatarUrl, getAvatarInitial } from '@/utils/avatar'
 
 const router = useRouter()
@@ -52,6 +53,10 @@ async function handleAvatarChange(event) {
   const file = event.target.files?.[0]
   event.target.value = ''
   if (!file) return
+  if (file.size > MAX_AVATAR_SIZE) {
+    toastError(`头像大小超出限制（最大 ${MAX_AVATAR_SIZE_LABEL}）`)
+    return
+  }
 
   avatarLoading.value = true
   errorMsg.value = ''
@@ -134,7 +139,7 @@ async function handleSave() {
     </SettingGroup>
 
     <p v-if="errorMsg" class="form-tip error">{{ errorMsg }}</p>
-    <p v-else class="form-tip">支持 JPG、PNG、GIF、WebP，大小不超过 2MB</p>
+    <p v-else class="form-tip">支持 JPG、PNG、GIF、WebP，大小不超过 {{ MAX_AVATAR_SIZE_LABEL }}</p>
 
     <button type="button" class="submit-btn" :disabled="loading" @click="handleSave">
       {{ loading ? '保存中...' : '保存' }}

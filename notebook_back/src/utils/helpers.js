@@ -10,6 +10,16 @@ function fail(res, message = '操作失败', code = 400, status = 400, data = nu
   return res.status(status).json(body);
 }
 
+/** multer/busboy 将 multipart 文件名按 latin1 解析，需还原 UTF-8（含已入库的乱码记录） */
+function decodeUploadFilename(name) {
+  if (!name || typeof name !== 'string') return name;
+  if (/[\u3400-\u9fff\uf900-\ufaff]/.test(name)) return name;
+
+  const decoded = Buffer.from(name, 'latin1').toString('utf8');
+  if (decoded !== name && /[\u3400-\u9fff]/.test(decoded)) return decoded;
+  return name;
+}
+
 function countWords(text) {
   if (!text) return 0;
   const stripped = text.replace(/\s/g, '');
@@ -231,4 +241,5 @@ module.exports = {
   encryptContentIfNeeded,
   collectDescendantIds,
   ensureRootFolder,
+  decodeUploadFilename,
 };

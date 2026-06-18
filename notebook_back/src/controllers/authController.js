@@ -1,28 +1,16 @@
 const db = require('../config/db');
-const path = require('path');
-const fs = require('fs');
 const multer = require('multer');
+const uploadConfig = require('../config/upload');
 const cryptoUtil = require('../utils/crypto');
+const oss = require('../utils/oss');
 const { signToken } = require('../middleware/auth');
-const { ok, fail, ensureRootFolder } = require('../utils/helpers');
-
-const uploadRoot = path.join(__dirname, '../../uploads');
-const avatarDir = path.join(uploadRoot, 'avatars');
-if (!fs.existsSync(avatarDir)) fs.mkdirSync(avatarDir, { recursive: true });
+const { ok, fail, ensureRootFolder, decodeUploadFilename } = require('../utils/helpers');
 
 const AVATAR_MIMES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/bmp']);
 
-const avatarStorage = multer.diskStorage({
-  destination: (_req, _file, cb) => cb(null, avatarDir),
-  filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname).toLowerCase() || '.jpg';
-    cb(null, `user-${req.user.userId}-${Date.now()}${ext}`);
-  },
-});
-
 const avatarUpload = multer({
-  storage: avatarStorage,
-  limits: { fileSize: 2 * 1024 * 1024 },
+  storage: multer.memoryStorage(),
+  limits: { fileSize: uploadConfig.maxAvatarBytes },
   fileFilter: (_req, file, cb) => {
     if (AVATAR_MIMES.has(file.mimetype)) {
       cb(null, true);
@@ -31,18 +19,6 @@ const avatarUpload = multer({
     }
   },
 });
-
-function removeAvatarFile(avatarPath) {
-  if (!avatarPath || !avatarPath.startsWith('/uploads/avatars/')) return;
-  const filePath = path.join(uploadRoot, 'avatars', path.basename(avatarPath));
-  if (fs.existsSync(filePath)) {
-    try {
-      fs.unlinkSync(filePath);
-    } catch {
-      /* ignore */
-    }
-  }
-}
 
 async function fetchUserProfile(userId) {
   const [rows] = await db.query(
@@ -160,13 +136,29 @@ const uploadAvatar = [
   async (req, res) => {
     try {
       if (!req.file) return fail(res, '请选择头像图片');
+      if (!oss.isOssEnabled()) return fail(res, 'OSS 未配置，无法上传头像', 500, 500);
 
-      const user = await fetchUserProfile(req.user.userId);
-      if (!user) return fail(res, '用户不存在', 404, 404);
+      const [rows] = await db.query('SELECT avatar FROM core_user WHERE id = ?', [req.user.userId]);
+      if (!rows.length) return fail(res, '用户不存在', 404, 404);
+      const oldAvatar = rows[0].avatar;
 
-      const avatarUrl = `/uploads/avatars/${req.file.filename}`;
-      await db.query('UPDATE core_user SET avatar = ? WHERE id = ?', [avatarUrl, req.user.userId]);
-      removeAvatarFile(user.avatar);
+      const objectKey = oss.generateObjectKey(
+        `avatars/user-${req.user.userId}`,
+        decodeUploadFilename(req.file.originalname)
+      );
+      const uploaded = await oss.uploadBuffer(req.file.buffer, objectKey, {
+        contentType: req.file.mimetype,
+      });
+
+      await db.query('UPDATE core_user SET avatar = ? WHERE id = ?', [uploaded.url, req.user.userId]);
+
+      if (oldAvatar) {
+        try {
+          await oss.deleteStoredFile(oldAvatar);
+        } catch (delErr) {
+          console.error('delete old avatar failed:', delErr.message);
+        }
+      }
 
       const updated = await fetchUserProfile(req.user.userId);
       return ok(res, updated, '头像已更新');
@@ -175,7 +167,10 @@ const uploadAvatar = [
       if (error.message === '仅支持 JPG、PNG、GIF、WebP 格式') {
         return fail(res, error.message, 400, 400);
       }
-      return fail(res, '头像上传失败', 500, 500);
+      if (db.isRetryableDbError(error)) {
+        return fail(res, '数据库连接异常，请稍后重试', 503, 503);
+      }
+      return fail(res, error.message || '头像上传失败', 500, 500);
     }
   },
 ];

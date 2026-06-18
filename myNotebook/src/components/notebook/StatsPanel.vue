@@ -24,15 +24,6 @@ const metricCards = computed(() => {
       icon: 'note',
     },
     {
-      key: 'drafts',
-      label: '草稿数量',
-      value: s.draftCount || 0,
-      delta: deltas.draftCount ?? 0,
-      trend: trends.drafts || [],
-      tone: 'orange',
-      icon: 'drafts',
-    },
-    {
       key: 'updates',
       label: '近7天更新',
       value: s.weeklyUpdateCount ?? s.recentNotes?.length ?? 0,
@@ -40,6 +31,15 @@ const metricCards = computed(() => {
       trend: trends.updates || [],
       tone: 'green',
       icon: 'stats',
+    },
+    {
+      key: 'drafts',
+      label: '草稿数量',
+      value: s.draftCount || 0,
+      delta: deltas.draftCount ?? 0,
+      trend: trends.drafts || [],
+      tone: 'orange',
+      icon: 'drafts',
     },
   ]
 })

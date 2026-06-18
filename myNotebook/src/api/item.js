@@ -53,11 +53,20 @@ export function getAttachments(itemId) {
   return get(`/items/${itemId}/attachments`)
 }
 
-export function uploadAttachment(itemId, file) {
+export function uploadAttachment(itemId, file, { onProgress } = {}) {
   const formData = new FormData()
   formData.append('file', file)
   return request.post(`/items/${itemId}/attachments`, formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
+    timeout: 60000,
+    onUploadProgress: (event) => {
+      if (!onProgress) return
+      if (event.total) {
+        onProgress(Math.min(99, Math.round((event.loaded * 100) / event.total)))
+      } else {
+        onProgress(-1)
+      }
+    },
   })
 }
 

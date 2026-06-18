@@ -2,7 +2,16 @@
 import { ref, computed, watch, nextTick, onBeforeUnmount, onMounted } from 'vue'
 import { useNotebookStore } from '@/stores/notebook'
 import { shareNote, uploadAttachment, getAttachments, deleteAttachment } from '@/api/item'
-import { toastSuccess, toastError, toastWarning, toastInfo } from '@/utils/toast'
+import { toastSuccess, toastError, toastWarning, toastInfo, toastProgress, updateToast, dismiss } from '@/utils/toast'
+import { resolveUploadError, MAX_ATTACHMENT_SIZE, MAX_ATTACHMENT_SIZE_LABEL } from '@/utils/upload'
+import {
+  EDITOR_IMAGE_MAX_WIDTH,
+  EDITOR_IMAGE_MIN_WIDTH,
+  EDITOR_IMAGE_PASTE_MAX_WIDTH,
+  EDITOR_IMAGE_PASTE_QUALITY,
+} from '@/config/editor'
+import { resizeImageFile } from '@/utils/image'
+import { copyTextToClipboard } from '@/utils/clipboard'
 import UnsavedChangesDialog from './UnsavedChangesDialog.vue'
 import WechatConfirmDialog from './WechatConfirmDialog.vue'
 import AppIcon from '@/components/AppIcon.vue'
@@ -29,6 +38,7 @@ const folderNameInputRef = ref(null)
 const contentEditorRef = ref(null)
 const attachments = ref([])
 const attachmentsLoading = ref(false)
+const isUploading = ref(false)
 const saveStatus = ref('saved')
 const lastSavedTitle = ref('')
 const lastSavedContent = ref('')
@@ -52,6 +62,16 @@ const fontSizes = [12, 14, 15, 16, 18, 20, 24, 28, 32]
 const fontColor = ref('#374151')
 const imgContextMenu = ref({ visible: false, x: 0, y: 0, src: '', alt: '', imgEl: null })
 const imagePreview = ref({ visible: false, src: '', alt: '' })
+const imageResizeBar = ref({
+  visible: false,
+  left: 0,
+  top: 0,
+  width: 0,
+  value: EDITOR_IMAGE_MAX_WIDTH,
+  min: EDITOR_IMAGE_MIN_WIDTH,
+  max: EDITOR_IMAGE_MAX_WIDTH,
+})
+let lastTouchTime = 0
 const leaveDialogVisible = ref(false)
 const clearDialogVisible = ref(false)
 let pendingLeaveResolve = null
@@ -156,7 +176,7 @@ async function performAutoSave() {
 }
 
 async function saveNote(options = {}) {
-  const { manual = false, force = false } = options
+  const { manual = false, force = false, status, draft = false } = options
   if (!currentItem.value || currentItem.value.itemType !== 'note') return false
   if (!force && !isDirty()) {
     saveStatus.value = 'saved'
@@ -171,16 +191,22 @@ async function saveNote(options = {}) {
   saveStatus.value = 'saving'
   clearAutoSaveTimer()
   try {
-    await notebookStore.saveCurrentNote({
+    const payload = {
       name: editTitle.value,
       content: editContent.value,
-    })
+    }
+    if (draft || status === 'draft') {
+      payload.status = 'draft'
+    }
+    await notebookStore.saveCurrentNote(payload)
     lastSavedTitle.value = editTitle.value
     lastSavedContent.value = editContent.value
     saveStatus.value = 'saved'
     syncUnsavedState()
     if (manual) {
-      toastSuccess('保存成功')
+      toastSuccess(draft ? '已保存为草稿' : '保存成功')
+    } else if (draft) {
+      toastSuccess('已保存为草稿')
     }
     return true
   } catch (err) {
@@ -210,8 +236,14 @@ function rewriteContentImages(html) {
   for (const file of attachments.value) {
     const signedUrl = resolveFileUrl(file.url)
     if (!signedUrl) continue
+
+    const stableUrl = resolveFileUrl(file.storagePath)
+    if (stableUrl.startsWith('http://') || stableUrl.startsWith('https://')) {
+      result = result.replace(new RegExp(escapeRegExp(stableUrl), 'g'), signedUrl)
+    }
+
     const filename = file.storagePath?.replace(/^\/uploads\//, '') || file.fileName
-    if (filename) {
+    if (filename && !stableUrl.startsWith('http')) {
       result = result.replace(
         new RegExp(`/uploads/${escapeRegExp(filename)}(?:\\?[^"'\\s>]*)?`, 'g'),
         signedUrl,
@@ -257,6 +289,85 @@ function clearImageSelection() {
   editor?.querySelectorAll('.content-img-selected').forEach((el) => el.classList.remove('content-img-selected'))
   editor?.querySelectorAll('.content-img-wrap-selected').forEach((el) => el.classList.remove('content-img-wrap-selected'))
   selectedImageEl = null
+  imageResizeBar.value.visible = false
+}
+
+function getEditorImageMaxWidth(img) {
+  const editor = contentEditorRef.value
+  const padding = 32
+  const containerWidth = editor?.clientWidth ? editor.clientWidth - padding : EDITOR_IMAGE_MAX_WIDTH
+  const cap = Math.min(Math.max(containerWidth, EDITOR_IMAGE_MIN_WIDTH), EDITOR_IMAGE_MAX_WIDTH)
+  if (img?.naturalWidth) {
+    return Math.min(cap, img.naturalWidth)
+  }
+  return cap
+}
+
+function getImageDisplayWidth(img) {
+  if (!img) return EDITOR_IMAGE_MAX_WIDTH
+  const styleWidth = parseInt(img.style.width, 10)
+  if (styleWidth > 0) return styleWidth
+  const rectWidth = img.getBoundingClientRect().width
+  if (rectWidth > 0) return Math.round(rectWidth)
+  return getEditorImageMaxWidth(img)
+}
+
+function applyImageWidth(img, width, { commit = false } = {}) {
+  if (!img) return
+  const maxW = getEditorImageMaxWidth(img)
+  const clamped = Math.max(EDITOR_IMAGE_MIN_WIDTH, Math.min(Math.round(width), maxW))
+  img.style.width = `${clamped}px`
+  img.style.height = 'auto'
+  if (commit) handleEditorInput()
+}
+
+function updateImageResizeBar() {
+  if (!selectedImageEl || !isEditing.value) {
+    imageResizeBar.value.visible = false
+    return
+  }
+  const wrap = selectedImageEl.closest('.content-img-wrap') || selectedImageEl
+  const rect = wrap.getBoundingClientRect()
+  imageResizeBar.value = {
+    visible: true,
+    left: rect.left,
+    top: rect.bottom + 4,
+    width: Math.max(rect.width, 120),
+    value: getImageDisplayWidth(selectedImageEl),
+    min: EDITOR_IMAGE_MIN_WIDTH,
+    max: getEditorImageMaxWidth(selectedImageEl),
+  }
+}
+
+function handleImageResizeBarInput() {
+  if (!selectedImageEl) return
+  applyImageWidth(selectedImageEl, imageResizeBar.value.value)
+  nextTick(updateImageResizeBar)
+}
+
+function handleImageResizeBarChange() {
+  handleImageResizeBarInput()
+  handleEditorInput()
+}
+
+function refreshImageResizeConstraints(img) {
+  if (!img) return
+  const maxW = getEditorImageMaxWidth(img)
+  applyImageWidth(img, getImageDisplayWidth(img))
+  if (imageResizeBar.value.visible && selectedImageEl === img) {
+    imageResizeBar.value.max = maxW
+    imageResizeBar.value.value = getImageDisplayWidth(img)
+    updateImageResizeBar()
+  }
+}
+
+function bindImageLoadConstraints(img) {
+  if (!img) return
+  if (img.complete && img.naturalWidth) {
+    refreshImageResizeConstraints(img)
+    return
+  }
+  img.addEventListener('load', () => refreshImageResizeConstraints(img), { once: true })
 }
 
 function selectEditorImage(img) {
@@ -277,18 +388,44 @@ function selectEditorImage(img) {
   sel.removeAllRanges()
   sel.addRange(range)
   savedSelection = range.cloneRange()
+  applyImageWidth(img, getImageDisplayWidth(img))
+  bindImageLoadConstraints(img)
+  nextTick(updateImageResizeBar)
 }
 
 function handleEditorMouseDown(e) {
+  if (Date.now() - lastTouchTime < 500) return
   if (e.button !== 0) return
+  if (e.target.closest('.img-resize-bar')) return
   const img = e.target.closest('img.content-img')
   const wrap = e.target.closest('.content-img-wrap')
   if (img || wrap) {
     e.preventDefault()
     const targetImg = img || wrap?.querySelector('img.content-img')
     if (targetImg) selectEditorImage(targetImg)
-  } else if (!e.target.closest('.img-ctx-menu')) {
+  } else if (!e.target.closest('.img-ctx-menu') && !e.target.closest('.img-resize-bar')) {
     clearImageSelection()
+  }
+}
+
+function handleEditorTouchStart(e) {
+  if (!isEditing.value) return
+  if (e.target.closest('.img-resize-bar')) return
+  const img = e.target.closest('img.content-img')
+  const wrap = e.target.closest('.content-img-wrap')
+  const targetImg = img || wrap?.querySelector('img.content-img')
+  if (!targetImg) return
+  lastTouchTime = Date.now()
+  selectEditorImage(targetImg)
+}
+
+function handlePreviewClick(e) {
+  const img = e.target.closest('img.content-img')
+  if (!img) return
+  imagePreview.value = {
+    visible: true,
+    src: resolveFileUrl(img.getAttribute('src') || ''),
+    alt: img.getAttribute('alt') || '',
   }
 }
 
@@ -360,14 +497,14 @@ async function handleDeleteEditorImage() {
       await deleteAttachment(attachment.id)
       await loadAttachments()
     } catch (err) {
-      message.value = err.message || '附件删除失败'
-      setTimeout(() => { message.value = '' }, 2000)
+      toastError(err.message || '附件删除失败')
     }
   }
 }
 
 function onDocumentClick(e) {
   closeImgContextMenu()
+  if (e.target.closest('.img-resize-bar')) return
   const inEditor = e.target.closest('.content-editor')
   const inToolbar = e.target.closest('.toolbar')
   if (!inEditor && !inToolbar) {
@@ -379,10 +516,13 @@ function onDocumentKeydown(e) {
   if (e.key === 'Escape') {
     closeImgContextMenu()
     closeImagePreview()
+    clearImageSelection()
   }
 }
 
-const renderedPreview = computed(() => ensureImageWrappers(rewriteContentImages(contentToHtml(editContent.value))))
+const renderedPreview = computed(() =>
+  ensureImageWrappers(rewriteContentImages(contentToHtml(editContent.value)), { forPreview: true })
+)
 
 function isHtmlContent(text) {
   return /<[a-z][\s\S]*>/i.test(text || '')
@@ -408,10 +548,14 @@ function markdownToEditorHtml(text) {
     .replace(/\n/g, '<br>')
 }
 
-function ensureImageWrappers(html) {
+function ensureImageWrappers(html, { forPreview = false } = {}) {
   const temp = document.createElement('div')
   temp.innerHTML = html
-  temp.querySelectorAll('img.content-img').forEach((img) => {
+  temp.querySelectorAll('img').forEach((img) => {
+    img.classList.add('content-img')
+    img.removeAttribute('width')
+    img.removeAttribute('height')
+    img.style.height = ''
     let wrap = img.closest('.content-img-wrap')
     if (!wrap) {
       wrap = document.createElement('div')
@@ -419,9 +563,41 @@ function ensureImageWrappers(html) {
       img.parentNode.insertBefore(wrap, img)
       wrap.appendChild(img)
     }
-    wrap.setAttribute('contenteditable', 'false')
+    if (forPreview) {
+      wrap.removeAttribute('contenteditable')
+    } else {
+      wrap.setAttribute('contenteditable', 'false')
+    }
   })
   return temp.innerHTML
+}
+
+function normalizeEditorImages() {
+  const editor = contentEditorRef.value
+  if (!editor) return
+  let changed = false
+  editor.querySelectorAll('img').forEach((img) => {
+    if (!img.classList.contains('content-img')) {
+      img.classList.add('content-img')
+      changed = true
+    }
+    if (img.hasAttribute('width') || img.hasAttribute('height') || img.style.height) {
+      img.removeAttribute('width')
+      img.removeAttribute('height')
+      img.style.height = ''
+      changed = true
+    }
+    let wrap = img.closest('.content-img-wrap')
+    if (!wrap) {
+      wrap = document.createElement('div')
+      wrap.className = 'content-img-wrap align-left'
+      wrap.setAttribute('contenteditable', 'false')
+      img.parentNode.insertBefore(wrap, img)
+      wrap.appendChild(img)
+      changed = true
+    }
+  })
+  if (changed) handleEditorInput()
 }
 
 function syncEditorFromContent() {
@@ -480,11 +656,11 @@ function handleEditorBlur(e) {
   pushHistory()
 }
 
-function wrapSelectionWithTag(tagName) {
+function wrapSelectionWithElement(createElement) {
   const sel = window.getSelection()
   if (!sel.rangeCount || sel.isCollapsed) return false
   const range = sel.getRangeAt(0)
-  const el = document.createElement(tagName)
+  const el = createElement()
   try {
     range.surroundContents(el)
   } catch {
@@ -498,26 +674,24 @@ function wrapSelectionWithTag(tagName) {
   return true
 }
 
+function wrapSelectionWithTag(tagName) {
+  return wrapSelectionWithElement(() => document.createElement(tagName))
+}
+
 function execEditorCommand(command, value = null) {
   const editor = contentEditorRef.value
   if (!editor || !isEditing.value) return
 
-  editor.focus()
-  const sel = window.getSelection()
-  if (savedSelection) {
-    try {
-      sel.removeAllRanges()
-      sel.addRange(savedSelection)
-    } catch {
-      savedSelection = null
-    }
+  if (command === 'bold' || command === 'italic') {
+    applyInlineFormat(command)
+    return
   }
 
+  editor.focus()
+  restoreSavedSelection()
+
   document.execCommand('styleWithCSS', false, false)
-  let ok = document.execCommand(command, false, value)
-  if (!ok && (command === 'italic' || command === 'bold') && sel.rangeCount > 0 && !sel.isCollapsed) {
-    ok = wrapSelectionWithTag(command === 'italic' ? 'em' : 'strong')
-  }
+  const ok = document.execCommand(command, false, value)
 
   savedSelection = null
   if (ok || command === 'foreColor') {
@@ -624,6 +798,130 @@ function saveEditorSelection() {
   }
 }
 
+function restoreSavedSelection() {
+  const sel = window.getSelection()
+  if (savedSelection) {
+    try {
+      sel.removeAllRanges()
+      sel.addRange(savedSelection)
+    } catch {
+      savedSelection = null
+    }
+  }
+}
+
+function getEditorSelectionRange() {
+  const editor = contentEditorRef.value
+  const sel = window.getSelection()
+  if (!editor || !sel.rangeCount) return null
+  const range = sel.getRangeAt(0)
+  if (!editor.contains(range.commonAncestorContainer)) return null
+  return range
+}
+
+function selectionTouchesNonEditable(range) {
+  const container = document.createElement('div')
+  container.appendChild(range.cloneContents())
+  return container.querySelector('img.content-img, .content-img-wrap') !== null
+}
+
+function unwrapElement(el) {
+  const parent = el.parentNode
+  if (!parent) return
+  while (el.firstChild) parent.insertBefore(el.firstChild, el)
+  parent.removeChild(el)
+}
+
+function insertCollapsedFormatSpan(className, range, sel) {
+  const el = document.createElement('span')
+  el.className = className
+  const marker = document.createTextNode('\u200B')
+  el.appendChild(marker)
+  range.insertNode(el)
+  range.setStart(marker, 1)
+  range.collapse(true)
+  sel.removeAllRanges()
+  sel.addRange(range)
+}
+
+const INLINE_FORMAT = {
+  italic: { className: 'fmt-italic', legacyTags: ['em', 'i'] },
+  bold: { className: 'fmt-bold', legacyTags: ['strong', 'b'] },
+}
+
+function findActiveFormatNode(anchor, editor, config) {
+  if (!anchor || !editor) return null
+  const byClass = anchor.closest?.(`.${config.className}`)
+  if (byClass && editor.contains(byClass)) return byClass
+  for (const tag of config.legacyTags) {
+    const el = anchor.closest?.(tag)
+    if (el && editor.contains(el)) return el
+  }
+  return null
+}
+
+function applyInlineFormat(kind) {
+  const config = INLINE_FORMAT[kind]
+  const editor = contentEditorRef.value
+  if (!config || !editor || !isEditing.value) return
+
+  clearImageSelection()
+  editor.focus()
+  restoreSavedSelection()
+
+  const sel = window.getSelection()
+  const range = getEditorSelectionRange()
+  if (!range || selectionTouchesNonEditable(range)) {
+    savedSelection = null
+    return
+  }
+
+  let anchor = sel.anchorNode
+  if (anchor?.nodeType === Node.TEXT_NODE) anchor = anchor.parentElement
+  const activeNode = findActiveFormatNode(anchor, editor, config)
+
+  if (range.collapsed) {
+    if (activeNode) {
+      unwrapElement(activeNode)
+    } else {
+      insertCollapsedFormatSpan(config.className, range, sel)
+    }
+  } else if (activeNode && activeNode.textContent === range.toString()) {
+    unwrapElement(activeNode)
+  } else {
+    wrapSelectionWithElement(() => {
+      const span = document.createElement('span')
+      span.className = config.className
+      return span
+    })
+  }
+
+  savedSelection = null
+  handleEditorInput()
+}
+
+function handleInlineFormat(kind) {
+  saveEditorSelection()
+  applyInlineFormat(kind)
+}
+
+function onEditorSelectionChange() {
+  if (isApplyingHistory || isLoadingItem) return
+  const editor = contentEditorRef.value
+  if (!editor || !isEditing.value) return
+  const sel = window.getSelection()
+  if (!sel.rangeCount) return
+  const anchor = sel.anchorNode
+  if (!anchor || !editor.contains(anchor)) return
+  const parent = anchor.nodeType === Node.TEXT_NODE ? anchor.parentElement : anchor
+  if (parent?.closest('.content-img-wrap, img.content-img')) return
+  try {
+    savedSelection = sel.getRangeAt(0).cloneRange()
+  } catch {
+    /* ignore invalid range */
+  }
+}
+
 function insertImageInEditor(url, alt) {
   const editor = contentEditorRef.value
   if (!editor) return
@@ -696,6 +994,7 @@ async function ensureNoteSaved() {
 }
 
 watch(currentItem, async (item, oldItem) => {
+  clearImageSelection()
   if (oldItem?.itemType === 'note' && isDirty()) {
     clearAutoSaveTimer()
     await saveNote()
@@ -816,6 +1115,21 @@ async function handleSave() {
   if (ok) await loadAttachments()
 }
 
+async function handleSaveDraft() {
+  if (!currentItem.value) return
+  if (isEditingTitle.value) finishTitleEdit()
+  message.value = ''
+  pushHistory()
+  const ok = await saveNote({ manual: true, force: true, draft: true })
+  if (ok) await loadAttachments()
+}
+
+async function handleBack() {
+  const canLeave = await notebookStore.tryLeaveEditor()
+  if (!canLeave) return
+  notebookStore.closeNoteEditor()
+}
+
 async function handleToggleFavorite() {
   if (!currentItem.value) return
   try {
@@ -836,53 +1150,128 @@ async function handleShare() {
   try {
     const result = await shareNote(currentItem.value.id)
     const url = `${window.location.origin}/share/${result.shareToken}`
-    await navigator.clipboard.writeText(url)
-    toastSuccess('分享链接已复制到剪贴板')
+    const copied = await copyTextToClipboard(url)
+    if (copied) {
+      toastSuccess('分享链接已复制到剪贴板')
+    } else {
+      window.prompt('请手动复制分享链接', url)
+    }
   } catch (err) {
     toastError(err.message)
   }
 }
 
 function handleInsertImage() {
+  if (isUploading.value) return
   saveEditorSelection()
   imageInput.value?.click()
+}
+
+async function prepareImageFile(file) {
+  return resizeImageFile(file, {
+    maxWidth: EDITOR_IMAGE_PASTE_MAX_WIDTH,
+    maxHeight: EDITOR_IMAGE_PASTE_MAX_WIDTH,
+    quality: EDITOR_IMAGE_PASTE_QUALITY,
+  })
+}
+
+async function handleEditorPaste(e) {
+  const clipboard = e.clipboardData
+  if (!clipboard || isUploading.value) return
+
+  const imageFiles = []
+  for (const item of clipboard.items) {
+    if (item.kind === 'file' && item.type.startsWith('image/')) {
+      const file = item.getAsFile()
+      if (file) imageFiles.push(file)
+    }
+  }
+
+  if (imageFiles.length) {
+    e.preventDefault()
+    saveEditorSelection()
+    for (const file of imageFiles) {
+      const result = await uploadFileWithProgress(file)
+      if (result) {
+        insertImageInEditor(resolveFileUrl(result.url), file.name || '粘贴图片')
+      }
+    }
+    return
+  }
+
+  nextTick(() => normalizeEditorImages())
+}
+
+async function uploadFileWithProgress(file) {
+  if (file.size > MAX_ATTACHMENT_SIZE) {
+    toastWarning(`「${file.name}」超出大小限制（最大 ${MAX_ATTACHMENT_SIZE_LABEL}）`)
+    return null
+  }
+
+  let uploadTarget = file
+  if (file.type?.startsWith('image/')) {
+    try {
+      uploadTarget = await prepareImageFile(file)
+    } catch (err) {
+      toastError(err.message || '图片处理失败')
+      return null
+    }
+  }
+
+  try {
+    await ensureNoteSaved()
+  } catch (err) {
+    toastError(err.message || '请先保存笔记后再上传')
+    return null
+  }
+
+  isUploading.value = true
+  const progressId = toastProgress(`正在上传「${file.name}」`, 0)
+
+  try {
+    const result = await uploadAttachment(currentItem.value.id, uploadTarget, {
+      onProgress: (percent) => {
+        updateToast(progressId, {
+          message: `正在上传「${file.name}」`,
+          progress: percent < 0 ? -1 : percent,
+        })
+      },
+    })
+    updateToast(progressId, { progress: 100 })
+    dismiss(progressId)
+    toastSuccess(`「${file.name}」上传成功`)
+    await loadAttachments()
+    markDirty()
+    return result
+  } catch (err) {
+    dismiss(progressId)
+    toastError(resolveUploadError(err, file.name))
+    return null
+  } finally {
+    isUploading.value = false
+  }
 }
 
 async function handleImageChange(e) {
   const file = e.target.files?.[0]
   if (!file) return
-  try {
-    await ensureNoteSaved()
-    const result = await uploadAttachment(currentItem.value.id, file)
+  const result = await uploadFileWithProgress(file)
+  if (result) {
     const url = resolveFileUrl(result.url)
     insertImageInEditor(url, file.name)
-    await loadAttachments()
-    markDirty()
-    message.value = `图片「${file.name}」已插入`
-    setTimeout(() => { message.value = '' }, 2000)
-  } catch (err) {
-    message.value = err.message || '图片上传失败'
   }
   e.target.value = ''
 }
 
 function handleAttachment() {
+  if (isUploading.value) return
   fileInput.value?.click()
 }
 
 async function handleFileChange(e) {
   const file = e.target.files?.[0]
   if (!file) return
-  try {
-    await ensureNoteSaved()
-    await uploadAttachment(currentItem.value.id, file)
-    await loadAttachments()
-    markDirty()
-    message.value = `附件「${file.name}」上传成功`
-    setTimeout(() => { message.value = '' }, 2000)
-  } catch (err) {
-    message.value = err.message || '附件上传失败'
-  }
+  await uploadFileWithProgress(file)
   e.target.value = ''
 }
 
@@ -892,11 +1281,31 @@ async function handleRemoveAttachment(id) {
     await deleteAttachment(id)
     await loadAttachments()
     markDirty()
-    message.value = '附件已删除'
-    setTimeout(() => { message.value = '' }, 2000)
+    toastSuccess('附件已删除')
   } catch (err) {
-    message.value = err.message || '删除失败'
+    toastError(err.message || '删除失败')
   }
+}
+
+function handleDownloadAttachment(file) {
+  if (!confirm(`是否下载「${file.fileName}」？`)) return
+  const url = resolveFileUrl(file.url)
+  if (!url) {
+    toastError('下载链接无效')
+    return
+  }
+  const link = document.createElement('a')
+  link.href = url
+  link.download = file.fileName || 'download'
+  link.target = '_blank'
+  link.rel = 'noopener'
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+}
+
+function getAttachmentIconName(file) {
+  return isImageFile(file) ? 'insert-image' : 'attachment'
 }
 
 function handleClear() {
@@ -967,7 +1376,15 @@ function handleDelete() {
   })
 }
 
+watch(isEditing, (val) => {
+  if (!val) {
+    clearImageSelection()
+  }
+})
+
 onMounted(() => {
+  document.addEventListener('selectionchange', onEditorSelectionChange)
+  window.addEventListener('resize', updateImageResizeBar)
   document.addEventListener('click', onDocumentClick)
   document.addEventListener('keydown', onDocumentKeydown)
   window.addEventListener('beforeunload', onBeforeUnload)
@@ -976,6 +1393,8 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   clearAutoSaveTimer()
+  document.removeEventListener('selectionchange', onEditorSelectionChange)
+  window.removeEventListener('resize', updateImageResizeBar)
   document.removeEventListener('click', onDocumentClick)
   document.removeEventListener('keydown', onDocumentKeydown)
   window.removeEventListener('beforeunload', onBeforeUnload)
@@ -989,8 +1408,14 @@ onBeforeUnmount(() => {
       <!-- 工具栏 -->
       <div class="toolbar">
         <div class="toolbar-row">
+          <button type="button" class="tool-btn" title="返回" @click="handleBack">
+            <AppIcon name="back" :size="18" alt="返回" />
+          </button>
           <button class="tool-btn" :disabled="saving" title="保存" @click="handleSave">
             <AppIcon name="save" :size="18" alt="保存" />
+          </button>
+          <button class="tool-btn" :disabled="saving" title="保存为草稿" @click="handleSaveDraft">
+            <AppIcon name="caogao" :size="18" alt="存为草稿" />
           </button>
           <button class="tool-btn" :title="isEditing ? '预览' : '编辑'" @click="handleEditToggle">
             <AppIcon :name="isEditing ? 'preview' : 'edit'" :size="18" :alt="isEditing ? '预览' : '编辑'" />
@@ -1007,10 +1432,22 @@ onBeforeUnmount(() => {
           <button class="tool-btn" :class="{ disabled: !canShare }" title="分享" @click="handleShare">
             <AppIcon name="share" :size="18" alt="分享" />
           </button>
-          <button class="tool-btn" title="插入图片" @click="handleInsertImage">
+          <button
+            class="tool-btn"
+            :class="{ disabled: isUploading }"
+            :disabled="isUploading"
+            title="插入图片"
+            @click="handleInsertImage"
+          >
             <AppIcon name="insert-image" :size="18" alt="插入图片" />
           </button>
-          <button class="tool-btn" title="附件" @click="handleAttachment">
+          <button
+            class="tool-btn"
+            :class="{ disabled: isUploading }"
+            :disabled="isUploading"
+            title="附件"
+            @click="handleAttachment"
+          >
             <AppIcon name="attachment" :size="18" alt="附件" />
           </button>
           <button class="tool-btn" title="清空" @click="handleClear">
@@ -1022,10 +1459,10 @@ onBeforeUnmount(() => {
 
           <template v-if="isEditing">
             <span class="toolbar-divider" />
-            <button type="button" class="tool-btn" title="加粗" @mousedown.prevent="handleFormatMouseDown" @click="execEditorCommand('bold')">
+            <button type="button" class="tool-btn" title="加粗" @mousedown.prevent="handleInlineFormat('bold')">
               <AppIcon name="bold" :size="18" alt="加粗" />
             </button>
-            <button type="button" class="tool-btn" title="倾斜" @mousedown.prevent="handleFormatMouseDown" @click="execEditorCommand('italic')">
+            <button type="button" class="tool-btn" title="倾斜" @mousedown.prevent="handleInlineFormat('italic')">
               <AppIcon name="italic" :size="18" alt="倾斜" />
             </button>
             <span class="toolbar-divider" />
@@ -1057,7 +1494,7 @@ onBeforeUnmount(() => {
       </div>
 
       <!-- 内容区 -->
-      <div class="content-area">
+      <div class="content-area" @scroll="updateImageResizeBar">
         <div class="title-row">
           <div class="title-main">
             <input
@@ -1084,23 +1521,28 @@ onBeforeUnmount(() => {
           <span class="save-status" :class="saveStatus">{{ saveStatusText }}</span>
         </div>
 
-        <div class="editor-body">
+        <div class="editor-body" @scroll="updateImageResizeBar">
           <div
             v-if="isEditing"
             ref="contentEditorRef"
             class="content-editor"
             contenteditable="true"
+            :style="{ '--editor-image-max-width': `${EDITOR_IMAGE_MAX_WIDTH}px` }"
             @input="handleEditorInput"
             @blur="handleEditorBlur"
             @mouseup="handleEditorMouseUp"
             @keyup="handleEditorKeyUp"
             @mousedown="handleEditorMouseDown"
+            @touchstart.passive="handleEditorTouchStart"
+            @paste="handleEditorPaste"
             @contextmenu="handleContentContextMenu"
           />
           <div
             v-else
             class="content-preview"
+            :style="{ '--editor-image-max-width': `${EDITOR_IMAGE_MAX_WIDTH}px` }"
             v-html="renderedPreview"
+            @click="handlePreviewClick"
             @contextmenu="handleContentContextMenu"
           />
         </div>
@@ -1112,19 +1554,23 @@ onBeforeUnmount(() => {
           </h4>
           <p v-if="attachmentsLoading" class="attachments-loading">加载中...</p>
           <ul v-else class="attachments-list">
-            <li v-for="file in attachments" :key="file.id" class="attachment-item">
-              <div v-if="isImageFile(file)" class="attachment-image-wrap">
-                <img :src="resolveFileUrl(file.url)" :alt="file.fileName" class="attachment-thumb" />
-              </div>
-              <AppIcon v-else name="note" :size="24" class="attachment-icon" alt="" />
-              <div class="attachment-info">
-                <a :href="resolveFileUrl(file.url)" target="_blank" rel="noopener" class="attachment-name">
-                  {{ file.fileName }}
-                </a>
-                <span class="attachment-meta">{{ formatFileSize(file.fileSize) }}</span>
-              </div>
-              <button type="button" class="attachment-del" title="删除附件" @click="handleRemoveAttachment(file.id)">
-                <AppIcon name="close" :size="14" alt="删除" />
+            <li v-for="file in attachments" :key="file.id" class="attachment-tag">
+              <button
+                type="button"
+                class="attachment-tag-main"
+                :title="file.fileName"
+                @click="handleDownloadAttachment(file)"
+              >
+                <AppIcon :name="getAttachmentIconName(file)" :size="14" alt="" />
+                <span class="attachment-tag-name">{{ file.fileName }}</span>
+              </button>
+              <button
+                type="button"
+                class="attachment-tag-del"
+                title="删除附件"
+                @click.stop="handleRemoveAttachment(file.id)"
+              >
+                <AppIcon name="close" :size="12" alt="删除" />
               </button>
             </li>
           </ul>
@@ -1203,6 +1649,29 @@ onBeforeUnmount(() => {
           <img :src="imagePreview.src" :alt="imagePreview.alt" class="image-preview-img" />
           <p v-if="imagePreview.alt" class="image-preview-caption">{{ imagePreview.alt }}</p>
         </div>
+      </div>
+
+      <div
+        v-if="imageResizeBar.visible"
+        class="img-resize-bar"
+        :style="{
+          left: `${imageResizeBar.left}px`,
+          top: `${imageResizeBar.top}px`,
+          width: `${imageResizeBar.width}px`,
+        }"
+        @mousedown.stop
+        @touchstart.stop
+        @click.stop
+      >
+        <input
+          v-model.number="imageResizeBar.value"
+          type="range"
+          class="img-resize-bar-slider"
+          :min="imageResizeBar.min"
+          :max="imageResizeBar.max"
+          @input="handleImageResizeBarInput"
+          @change="handleImageResizeBarChange"
+        />
       </div>
     </Teleport>
 
@@ -1469,12 +1938,17 @@ onBeforeUnmount(() => {
 
 .content-editor :deep(.content-img-wrap),
 .content-preview :deep(.content-img-wrap) {
-  width: 100%;
+  width: fit-content;
+  max-width: 100%;
   margin: 12px 0;
 }
 
 .content-editor :deep(.content-img-wrap) {
   cursor: pointer;
+}
+
+.content-editor :deep(.content-img-wrap-selected) {
+  position: relative;
 }
 
 .content-editor :deep(.content-img-wrap-selected .content-img),
@@ -1485,9 +1959,12 @@ onBeforeUnmount(() => {
 }
 
 .content-editor :deep(.content-img),
-.content-preview :deep(.content-img) {
+.content-preview :deep(.content-img),
+.content-editor :deep(img),
+.content-preview :deep(img) {
   display: block;
-  max-width: 100%;
+  max-width: min(100%, var(--editor-image-max-width, 720px));
+  height: auto;
   margin: 0;
   border-radius: 8px;
   border: 1px solid #e5e7eb;
@@ -1498,8 +1975,22 @@ onBeforeUnmount(() => {
   pointer-events: auto;
 }
 
-.content-preview :deep(.content-img) {
-  cursor: context-menu;
+@media (min-width: 769px) {
+  .content-preview {
+    cursor: text;
+  }
+
+  .content-preview :deep(a) {
+    cursor: pointer;
+  }
+
+  .content-preview :deep(.content-img-wrap) {
+    cursor: default;
+  }
+
+  .content-preview :deep(.content-img) {
+    cursor: pointer;
+  }
 }
 
 .content-editor :deep(.content-img-wrap.align-center .content-img),
@@ -1520,13 +2011,28 @@ onBeforeUnmount(() => {
   margin-right: auto;
 }
 
+.content-editor :deep(.fmt-italic),
+.content-preview :deep(.fmt-italic),
 .content-editor :deep(em),
 .content-editor :deep(i),
 .content-preview :deep(em),
 .content-preview :deep(i) {
   font-style: italic;
+  transform: skewX(-10deg);
+  display: inline-block;
 }
 
+.content-editor :deep(span[style*='font-style: italic']),
+.content-editor :deep(span[style*='font-style: oblique']),
+.content-preview :deep(span[style*='font-style: italic']),
+.content-preview :deep(span[style*='font-style: oblique']) {
+  font-style: italic;
+  transform: skewX(-10deg);
+  display: inline-block;
+}
+
+.content-editor :deep(.fmt-bold),
+.content-preview :deep(.fmt-bold),
 .content-editor :deep(strong),
 .content-editor :deep(b),
 .content-preview :deep(strong),
@@ -1535,8 +2041,8 @@ onBeforeUnmount(() => {
 }
 
 .attachments-section {
-  margin-top: 24px;
-  padding-top: 20px;
+  margin-top: 16px;
+  padding-top: 12px;
   border-top: 1px solid #e5e7eb;
 }
 
@@ -1544,9 +2050,9 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   gap: 6px;
-  margin: 0 0 12px;
-  font-size: 15px;
-  color: #334155;
+  margin: 0 0 8px;
+  font-size: 13px;
+  color: #64748b;
   font-weight: 600;
 }
 
@@ -1555,78 +2061,63 @@ onBeforeUnmount(() => {
   padding: 0;
   margin: 0;
   display: flex;
-  flex-direction: column;
-  gap: 8px;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 
-.attachment-item {
-  display: flex;
+.attachment-tag {
+  display: inline-flex;
   align-items: center;
-  gap: 12px;
-  padding: 10px 12px;
-  border: 1px solid #e5e7eb;
-  border-radius: 8px;
-  background: #fafafa;
+  max-width: min(100%, 240px);
+  height: 28px;
+  border: 1px solid #e2e8f0;
+  border-radius: 999px;
+  background: #f8fafc;
+  overflow: hidden;
 }
 
-.attachment-image-wrap {
-  flex-shrink: 0;
-}
-
-.attachment-thumb {
-  width: 48px;
-  height: 48px;
-  object-fit: cover;
-  border-radius: 6px;
-  border: 1px solid #e5e7eb;
-}
-
-.attachment-icon {
-  flex-shrink: 0;
-  width: 48px;
-  display: flex;
+.attachment-tag-main {
+  display: inline-flex;
   align-items: center;
-  justify-content: center;
-}
-
-.attachment-info {
-  flex: 1;
+  gap: 5px;
   min-width: 0;
+  max-width: 100%;
+  height: 100%;
+  padding: 0 2px 0 10px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 12px;
+  color: #334155;
 }
 
-.attachment-name {
-  display: block;
-  font-size: 14px;
+.attachment-tag-main:hover {
   color: #2563eb;
-  text-decoration: none;
+}
+
+.attachment-tag-name {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.attachment-name:hover {
-  text-decoration: underline;
-}
-
-.attachment-meta {
-  font-size: 12px;
-  color: #94a3b8;
-}
-
-.attachment-del {
+.attachment-tag-del {
   flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: 24px;
-  height: 24px;
+  height: 100%;
+  padding: 0;
   border: none;
-  border-radius: 4px;
+  border-left: 1px solid #e2e8f0;
   background: transparent;
-  color: #ef4444;
-  font-size: 18px;
-  line-height: 1;
+  color: #94a3b8;
   cursor: pointer;
 }
 
-.attachment-del:hover {
+.attachment-tag-del:hover {
+  color: #ef4444;
   background: #fef2f2;
 }
 
@@ -1636,7 +2127,7 @@ onBeforeUnmount(() => {
 
 .attachments-loading {
   margin: 0;
-  font-size: 13px;
+  font-size: 12px;
   color: #94a3b8;
 }
 
@@ -1779,6 +2270,29 @@ onBeforeUnmount(() => {
   background: #fef2f2;
 }
 
+.img-resize-bar {
+  position: fixed;
+  z-index: 4100;
+  height: 18px;
+  padding: 0 6px;
+  display: flex;
+  align-items: center;
+  box-sizing: border-box;
+  background: rgba(255, 255, 255, 0.96);
+  border: 1px solid #dbeafe;
+  border-radius: 4px;
+  box-shadow: 0 1px 4px rgba(37, 99, 235, 0.1);
+  pointer-events: auto;
+}
+
+.img-resize-bar-slider {
+  width: 100%;
+  height: 3px;
+  margin: 0;
+  accent-color: #2563eb;
+  cursor: pointer;
+}
+
 .image-preview-overlay {
   position: fixed;
   inset: 0;
@@ -1904,10 +2418,12 @@ onBeforeUnmount(() => {
   }
 
   .content-editor :deep(.content-img),
-  .content-preview :deep(.content-img) {
+  .content-preview :deep(.content-img),
+  .content-editor :deep(img),
+  .content-preview :deep(img) {
     border: none;
     border-radius: 0;
-    max-width: 100%;
+    max-width: min(100%, var(--editor-image-max-width, 720px));
   }
 
   .content-editor :deep(.content-img-wrap),
@@ -1930,70 +2446,20 @@ onBeforeUnmount(() => {
   }
 
   .attachments-list {
-    flex-direction: row;
-    flex-wrap: nowrap;
-    overflow-x: auto;
-    overflow-y: hidden;
-    gap: 8px;
-    padding-bottom: 2px;
-    scrollbar-width: none;
-    -ms-overflow-style: none;
+    flex-wrap: wrap;
+    overflow: visible;
+    gap: 6px;
+    padding-bottom: 0;
   }
 
-  .attachments-list::-webkit-scrollbar {
-    display: none;
+  .attachment-tag {
+    max-width: min(100%, 200px);
+    height: 26px;
   }
 
-  .attachment-item {
-    flex: 0 0 auto;
-    width: 76px;
-    flex-direction: column;
-    align-items: center;
-    gap: 4px;
-    padding: 6px 4px 4px;
-    position: relative;
-  }
-
-  .attachment-image-wrap {
-    width: 64px;
-    height: 64px;
-  }
-
-  .attachment-thumb {
-    width: 64px;
-    height: 64px;
-  }
-
-  .attachment-icon {
-    width: 64px;
-    height: 64px;
-    border: 1px solid #e5e7eb;
-    border-radius: 6px;
-    background: #fff;
-  }
-
-  .attachment-info {
-    width: 100%;
-    text-align: center;
-  }
-
-  .attachment-name {
+  .attachment-tag-main {
     font-size: 11px;
-  }
-
-  .attachment-meta {
-    display: none;
-  }
-
-  .attachment-del {
-    position: absolute;
-    top: 0;
-    right: 0;
-    width: 20px;
-    height: 20px;
-    border-radius: 50%;
-    background: rgba(255, 255, 255, 0.92);
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+    padding-left: 8px;
   }
 
   .attachments-empty-section {

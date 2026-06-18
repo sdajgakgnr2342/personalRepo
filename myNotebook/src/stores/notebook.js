@@ -206,14 +206,18 @@ export const useNotebookStore = defineStore('notebook', () => {
   async function saveCurrentNote(payload) {
     if (!currentItem.value) return
     const result = await itemApi.saveNote(currentItem.value.id, payload)
-    // 原地更新，避免替换对象引用触发 EditorPanel 重载编辑器、重置光标
+    const newStatus = payload.status ?? currentItem.value.status
     Object.assign(currentItem.value, {
-      ...payload,
+      name: payload.name ?? currentItem.value.name,
+      content: payload.content ?? currentItem.value.content,
+      status: newStatus,
       isSaved: true,
       wordCount: result.wordCount,
       lastSavedAt: result.lastSavedAt,
     })
-    await refreshPartial(['stats', 'tree'])
+    const refreshKeys = ['stats', 'tree']
+    if (newStatus === 'draft') refreshKeys.push('drafts')
+    await refreshPartial(refreshKeys)
     return result
   }
 
@@ -346,6 +350,12 @@ export const useNotebookStore = defineStore('notebook', () => {
     persistSession()
   }
 
+  function closeNoteEditor() {
+    currentItem.value = null
+    rightView.value = resolveModeRightView()
+    persistSession()
+  }
+
   function clearCurrent() {
     currentItem.value = null
   }
@@ -355,7 +365,7 @@ export const useNotebookStore = defineStore('notebook', () => {
     trashSelectedItem, hasUnsavedChanges,
     pendingRenameItemId,
     loadStats, loadTree, loadDrafts, loadFavorites, loadTrash, loadAll, refreshPartial,
-    openItem, saveCurrentNote, setSidebarMode, selectTrashItem, showStats, showSearch, clearCurrent,
+    openItem, saveCurrentNote, setSidebarMode, selectTrashItem, showStats, showSearch, clearCurrent, closeNoteEditor,
     getDefaultParentId, getRootFolderId, getTreeNodes, renameItem, deleteItem, countDescendants,
     findEncryptedFoldersInSubtree, findFolderById, restoreTrashItem, permanentDeleteItem, toggleFavorite,
     getEncryptedFoldersInSubtree, setHasUnsavedChanges, registerEditorActions, unregisterEditorActions,

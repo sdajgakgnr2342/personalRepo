@@ -7,6 +7,8 @@ const authRoutes = require('./routes/authRoutes');
 const notebookRoutes = require('./routes/notebookRoutes');
 const itemRoutes = require('./routes/itemRoutes');
 const userRoutes = require('./routes/userRoutes');
+const vaultRoutes = require('./routes/vaultRoutes');
+const adminRoutes = require('./routes/adminRoutes');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -21,6 +23,8 @@ app.use('/api/auth', authRoutes);
 app.use('/api/notebook', notebookRoutes);
 app.use('/api/items', itemRoutes);
 app.use('/api/users', userRoutes);
+app.use('/api/vault', vaultRoutes);
+app.use('/api/admin', adminRoutes);
 
 if (process.env.NODE_ENV !== 'production') {
   app.get('/api/test-db', async (_req, res) => {

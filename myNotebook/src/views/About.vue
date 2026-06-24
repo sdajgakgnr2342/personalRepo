@@ -1,86 +1,67 @@
 <script setup>
+import { ref, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 
 const router = useRouter()
+const appTitle = import.meta.env.VITE_APP_TITLE || 'myNotebook'
+
+const clickCount = ref(0)
+let resetTimer = null
+
+const REQUIRED_CLICKS = 5
+const CLICK_WINDOW_MS = 2000
+
+function handleFooterClick() {
+  clickCount.value += 1
+  clearTimeout(resetTimer)
+  resetTimer = setTimeout(() => {
+    clickCount.value = 0
+  }, CLICK_WINDOW_MS)
+
+  if (clickCount.value >= REQUIRED_CLICKS) {
+    clickCount.value = 0
+    router.push('/security-manage')
+  }
+}
+
+onUnmounted(() => {
+  clearTimeout(resetTimer)
+})
 </script>
 
 <template>
   <div class="about">
     <button type="button" class="back-link" @click="router.back()">返回</button>
-    <h1>关于 myNotebook</h1>
+    <h1>关于 {{ appTitle }}</h1>
     <p class="intro">
-      myNotebook 是一款前后端分离的个人在线笔记本，支持树形目录、富文本编辑、加密文件夹、
-      附件管理、分享链接与用户中心等能力。
+      {{ appTitle }} 是一款个人在线笔记本，帮助你整理思路、记录生活与工作。
+      你可以像使用实体笔记本一样，建立文件夹、撰写笔记，并在需要时快速找到它们。
     </p>
 
     <section class="section">
-      <h2>技术架构</h2>
+      <h2>主要功能</h2>
       <ul>
-        <li><strong>前端</strong>：Vue 3、Vite、Vue Router、Pinia、Axios</li>
-        <li><strong>后端</strong>：Node.js、Express、MySQL</li>
-        <li><strong>安全</strong>：JWT 登录鉴权、bcrypt 密码哈希、HTML 消毒、附件签名访问</li>
-        <li><strong>部署</strong>：Nginx 托管前端静态资源，反向代理 API，独立目录存放上传文件</li>
+        <li>树形目录管理笔记与文件夹</li>
+        <li>富文本编辑，支持图片与附件</li>
+        <li>草稿箱、收藏夹与垃圾箱</li>
+        <li>加密文件夹，保护私密内容</li>
+        <li>笔记分享与用户中心</li>
+        <li>内置计算器等小工具</li>
       </ul>
     </section>
 
     <section class="section">
-      <h2>前端结构</h2>
-      <pre><code>myNotebook/src/
-├── api/              # 接口封装（auth、item、notebook）
-├── assets/           # 图标与静态资源
-├── components/
-│   ├── notebook/     # 笔记本核心组件（编辑器、目录树、侧栏等）
-│   └── user/         # 用户中心组件
-├── router/           # 路由（笔记本、登录、分享、用户中心等）
-├── stores/           # Pinia 状态（notebook、user）
-├── utils/            # 工具（request、auth、toast、sanitize）
-└── views/            # 页面视图</code></pre>
-    </section>
-
-    <section class="section">
-      <h2>后端结构</h2>
-      <pre><code>notebook_back/src/
-├── config/           # 数据库配置
-├── controllers/      # 业务控制器
-│   ├── authController.js       # 登录注册、资料、头像
-│   ├── itemController.js       # 笔记/文件夹 CRUD
-│   ├── attachmentController.js # 附件上传下载
-│   └── statsController.js      # 首页统计
-├── middleware/       # JWT 鉴权
-├── routes/           # API 路由
-└── utils/            # 加密、HTML 消毒、树形结构等</code></pre>
-    </section>
-
-    <section class="section">
-      <h2>主要 API</h2>
+      <h2>使用建议</h2>
       <ul>
-        <li><code>/api/auth</code> — 登录、注册、用户资料、头像、改密</li>
-        <li><code>/api/notebook</code> — 目录树、草稿、收藏、垃圾箱、统计数据</li>
-        <li><code>/api/items</code> — 笔记/文件夹增删改、保存、搜索、分享、加密解锁</li>
-        <li><code>/uploads</code> — 历史本地上传文件（兼容访问）</li>
-        <li>附件、头像等新上传文件存储于阿里云 OSS</li>
+        <li>重要笔记建议定期整理到对应文件夹</li>
+        <li>私密内容可使用加密文件夹存放</li>
+        <li>更多操作说明请查看「帮助」页面</li>
       </ul>
     </section>
 
-    <section class="section">
-      <h2>数据模型</h2>
-      <ul>
-        <li><code>core_user</code> — 用户账号、昵称、头像</li>
-        <li><code>nb_item</code> — 文件夹与笔记统一树结构</li>
-        <li><code>nb_attachment</code> — 笔记附件</li>
-        <li><code>nb_folder_unlock</code> — 加密文件夹临时解锁记录</li>
-      </ul>
-    </section>
-
-    <section class="section">
-      <h2>本地开发</h2>
-      <ul>
-        <li>前端：在 <code>myNotebook</code> 目录执行 <code>npm run dev</code></li>
-        <li>后端：在 <code>notebook_back</code> 目录配置 <code>.env</code> 后执行 <code>npm run dev</code></li>
-        <li>数据库：执行 <code>notebook_back/sql/init.sql</code> 初始化表结构</li>
-        <li>前端 <code>.env.development</code> 中配置 API 代理地址</li>
-      </ul>
-    </section>
+    <p class="footer-note" @click="handleFooterClick">
+      感谢使用 {{ appTitle }}。
+    </p>
   </div>
 </template>
 
@@ -128,19 +109,10 @@ const router = useRouter()
   color: #374151;
 }
 
-.section code {
-  padding: 1px 5px;
-  background: #f1f5f9;
-  border-radius: 4px;
-  font-size: 13px;
-}
-
-pre {
-  padding: 16px;
-  background: var(--code-bg, #f8fafc);
-  border-radius: 8px;
-  overflow-x: auto;
-  font-size: 13px;
-  line-height: 1.6;
+.footer-note {
+  margin-top: 40px;
+  font-size: 14px;
+  color: #94a3b8;
+  user-select: none;
 }
 </style>

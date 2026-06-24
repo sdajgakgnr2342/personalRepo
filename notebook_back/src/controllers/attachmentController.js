@@ -3,6 +3,7 @@ const fs = require('fs');
 const multer = require('multer');
 const db = require('../config/db');
 const uploadConfig = require('../config/upload');
+const attachmentTypes = require('../config/attachmentTypes');
 const oss = require('../utils/oss');
 const { ok, fail, checkItemAccess, decodeUploadFilename } = require('../utils/helpers');
 const {
@@ -12,28 +13,11 @@ const {
 
 const uploadDir = path.join(__dirname, '../../uploads');
 
-const ALLOWED_MIMES = new Set([
-  'image/jpeg',
-  'image/png',
-  'image/gif',
-  'image/webp',
-  'image/bmp',
-  'image/svg+xml',
-  'application/pdf',
-  'text/plain',
-  'application/msword',
-  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-  'application/vnd.ms-excel',
-  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-  'application/zip',
-  'application/x-rar-compressed',
-]);
-
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: uploadConfig.maxAttachmentBytes },
   fileFilter: (_req, file, cb) => {
-    if (ALLOWED_MIMES.has(file.mimetype)) {
+    if (attachmentTypes.isAllowedAttachment(file)) {
       cb(null, true);
     } else {
       cb(new Error('不支持的文件类型'));
@@ -172,13 +156,14 @@ const uploadAttachment = [
       if (!(await requireNoteAccess(res, req.user.userId, items[0]))) return;
 
       const fileName = decodeUploadFilename(req.file.originalname);
+      const contentType = attachmentTypes.normalizeContentType(fileName, req.file.mimetype);
 
       const objectKey = oss.generateObjectKey(
         `attachments/${req.user.userId}/${itemId}`,
         fileName
       );
       const uploaded = await oss.uploadBuffer(req.file.buffer, objectKey, {
-        contentType: req.file.mimetype,
+        contentType,
       });
 
       const [result] = await db.query(
@@ -189,7 +174,7 @@ const uploadAttachment = [
           req.user.userId,
           fileName,
           uploaded.objectKey,
-          req.file.mimetype,
+          contentType,
           req.file.size,
         ]
       );
@@ -197,7 +182,7 @@ const uploadAttachment = [
       const row = {
         id: result.insertId,
         file_name: fileName,
-        file_type: req.file.mimetype,
+        file_type: contentType,
         file_size: req.file.size,
         file_path: uploaded.objectKey,
         created_at: new Date(),

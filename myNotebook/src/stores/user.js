@@ -1,6 +1,8 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { getToken, removeToken, setToken } from '@/utils/auth'
+import { lockSecretRoom } from '@/utils/secretRoom'
+import { useVaultStore } from '@/stores/vault'
 import * as authApi from '@/api/auth'
 
 export const useUserStore = defineStore('user', () => {
@@ -43,6 +45,17 @@ export const useUserStore = defineStore('user', () => {
     await authApi.changePassword(payload)
   }
 
+  async function setSecretCode(payload) {
+    userInfo.value = await authApi.setSecretCode(payload)
+    return userInfo.value
+  }
+
+  async function resetSecretCode(payload) {
+    userInfo.value = await authApi.resetSecretCode(payload)
+    lockSecretRoom()
+    return userInfo.value
+  }
+
   async function logout() {
     try {
       await authApi.logout()
@@ -52,7 +65,9 @@ export const useUserStore = defineStore('user', () => {
     token.value = ''
     userInfo.value = null
     removeToken()
+    lockSecretRoom()
+    useVaultStore().reset()
   }
 
-  return { token, userInfo, login, register, fetchUserInfo, updateProfile, uploadAvatar, changePassword, logout }
+  return { token, userInfo, login, register, fetchUserInfo, updateProfile, uploadAvatar, changePassword, setSecretCode, resetSecretCode, logout }
 })

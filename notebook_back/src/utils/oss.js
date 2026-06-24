@@ -1,6 +1,7 @@
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
+const attachmentTypes = require('../config/attachmentTypes');
 
 let client = null;
 
@@ -70,21 +71,7 @@ function getClient() {
 }
 
 function guessContentType(filename) {
-  const ext = path.extname(filename).toLowerCase();
-  const map = {
-    '.jpg': 'image/jpeg',
-    '.jpeg': 'image/jpeg',
-    '.png': 'image/png',
-    '.gif': 'image/gif',
-    '.webp': 'image/webp',
-    '.bmp': 'image/bmp',
-    '.svg': 'image/svg+xml',
-    '.pdf': 'application/pdf',
-    '.txt': 'text/plain',
-    '.json': 'application/json',
-    '.zip': 'application/zip',
-  };
-  return map[ext] || 'application/octet-stream';
+  return attachmentTypes.getMimeByExtension(filename) || 'application/octet-stream';
 }
 
 /**

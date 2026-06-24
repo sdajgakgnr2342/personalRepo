@@ -501,6 +501,84 @@ const getEncryptedFoldersInSubtree = async (req, res) => {
   }
 };
 
+async function verifyLoginPassword(userId, loginPassword) {
+  const [rows] = await db.query('SELECT password FROM core_user WHERE id = ?', [userId]);
+  if (!rows.length) return false;
+  return cryptoUtil.verifyPassword(loginPassword, rows[0].password);
+}
+
+const listMyEncryptedFolders = async (req, res) => {
+  try {
+    const [rows] = await db.query(
+      `SELECT id, name, parent_id, updated_at
+       FROM nb_item
+       WHERE user_id = ? AND item_type = 'folder' AND is_encrypted = 1
+         AND status != 'trash' AND deleted_at IS NULL
+       ORDER BY name ASC`,
+      [req.user.userId]
+    );
+    return ok(res, rows.map((r) => ({
+      id: r.id,
+      name: r.name,
+      parentId: r.parent_id,
+      updatedAt: r.updated_at,
+    })));
+  } catch (error) {
+    console.error('listMyEncryptedFolders error:', error);
+    return fail(res, '获取加密文件夹失败', 500, 500);
+  }
+};
+
+const changeFolderPassword = async (req, res) => {
+  try {
+    const { oldPassword, newPassword } = req.body;
+    if (!oldPassword || !newPassword) return fail(res, '请填写完整密码信息');
+    if (newPassword.length < 6) return fail(res, '新密码至少6位');
+
+    const folder = await getItemOrFail(req.user.userId, req.params.id);
+    if (!folder || folder.item_type !== 'folder' || !folder.is_encrypted) {
+      return fail(res, '加密文件夹不存在', 404, 404);
+    }
+
+    const valid = await cryptoUtil.verifyPassword(oldPassword, folder.folder_password_hash);
+    if (!valid) return fail(res, '当前文件夹密码错误', 401, 401);
+
+    const hashed = await cryptoUtil.hashPassword(newPassword);
+    await db.query('UPDATE nb_item SET folder_password_hash = ? WHERE id = ?', [hashed, folder.id]);
+    await db.query('DELETE FROM nb_folder_unlock WHERE user_id = ? AND folder_id = ?', [req.user.userId, folder.id]);
+
+    return ok(res, null, '文件夹密码已修改');
+  } catch (error) {
+    console.error('changeFolderPassword error:', error);
+    return fail(res, '修改密码失败', 500, 500);
+  }
+};
+
+const resetFolderPasswordForgotten = async (req, res) => {
+  try {
+    const { loginPassword, newPassword } = req.body;
+    if (!loginPassword || !newPassword) return fail(res, '请填写完整密码信息');
+    if (newPassword.length < 6) return fail(res, '新密码至少6位');
+
+    const loginValid = await verifyLoginPassword(req.user.userId, loginPassword);
+    if (!loginValid) return fail(res, '登录密码错误', 401, 401);
+
+    const folder = await getItemOrFail(req.user.userId, req.params.id);
+    if (!folder || folder.item_type !== 'folder' || !folder.is_encrypted) {
+      return fail(res, '加密文件夹不存在', 404, 404);
+    }
+
+    const hashed = await cryptoUtil.hashPassword(newPassword);
+    await db.query('UPDATE nb_item SET folder_password_hash = ? WHERE id = ?', [hashed, folder.id]);
+    await db.query('DELETE FROM nb_folder_unlock WHERE user_id = ? AND folder_id = ?', [req.user.userId, folder.id]);
+
+    return ok(res, null, '文件夹密码已重置');
+  } catch (error) {
+    console.error('resetFolderPasswordForgotten error:', error);
+    return fail(res, '重置密码失败', 500, 500);
+  }
+};
+
 module.exports = {
   getItem,
   createFolder,
@@ -516,4 +594,7 @@ module.exports = {
   getSharedNote,
   searchNotes,
   getEncryptedFoldersInSubtree,
+  listMyEncryptedFolders,
+  changeFolderPassword,
+  resetFolderPasswordForgotten,
 };

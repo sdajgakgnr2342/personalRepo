@@ -43,6 +43,7 @@ import search from '@/assets/topbar/search.png'
 import refresh from '@/assets/topbar/refresh.png'
 import help from '@/assets/topbar/help.png'
 import about from '@/assets/topbar/about.png'
+import calculator from '@/assets/topbar/calculator.svg'
 import user from '@/assets/topbar/user.png'
 
 import success from '@/assets/toast/success.png'
@@ -100,6 +101,7 @@ export const icons = {
   refresh,
   help,
   about,
+  calculator,
   user,
   success,
   error,

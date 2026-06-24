@@ -2,6 +2,7 @@
 import { ref, computed, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useNotebookStore } from '@/stores/notebook'
+import { useUserStore } from '@/stores/user'
 import AppIcon from '@/components/AppIcon.vue'
 import EmptyState from '@/components/EmptyState.vue'
 import { getContentTypeIcon } from '@/utils/icons'
@@ -13,6 +14,7 @@ const props = defineProps({
 })
 
 const notebookStore = useNotebookStore()
+const userStore = useUserStore()
 const router = useRouter()
 const route = useRoute()
 
@@ -39,6 +41,22 @@ function switchMode(mode) {
 
 function handleShowStats() {
   emit('show-stats')
+}
+
+async function goCalculator() {
+  emit('close-mobile')
+  try {
+    if (!userStore.userInfo) {
+      await userStore.fetchUserInfo()
+    }
+  } catch {
+    /* ignore */
+  }
+  if (userStore.userInfo && !userStore.userInfo.secretCodeSet) {
+    router.push('/secret-code-setup')
+    return
+  }
+  router.push('/calculator')
 }
 
 function goHelp() {
@@ -184,6 +202,16 @@ function goUserCenter() {
             title="垃圾箱为空"
           />
         </template>
+
+        <div
+          class="nav-item"
+          :class="{ active: route.path === '/calculator' || route.path === '/secret-code-setup' }"
+          title="计算器"
+          @click="goCalculator"
+        >
+          <AppIcon name="calculator" :size="20" alt="计算器" class="nav-icon" />
+          <span v-show="!collapsed" class="nav-label">计算器</span>
+        </div>
       </section>
     </div>
 

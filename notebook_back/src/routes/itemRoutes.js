@@ -11,6 +11,9 @@ router.use(authMiddleware);
 
 router.get('/search', itemController.searchNotes);
 router.post('/folders', itemController.createFolder);
+router.get('/folders/encrypted', itemController.listMyEncryptedFolders);
+router.put('/folders/:id/password', itemController.changeFolderPassword);
+router.post('/folders/:id/password/forgot', itemController.resetFolderPasswordForgotten);
 router.post('/notes', itemController.createNote);
 router.delete('/attachments/:id', attachmentController.deleteAttachment);
 

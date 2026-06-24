@@ -78,6 +78,18 @@ export function getEncryptedFolders(id) {
   return get(`/items/${id}/encrypted-folders`)
 }
 
+export function listEncryptedFolders() {
+  return get('/items/folders/encrypted')
+}
+
+export function changeFolderPassword(id, data) {
+  return put(`/items/folders/${id}/password`, data)
+}
+
+export function resetFolderPasswordForgotten(id, data) {
+  return post(`/items/folders/${id}/password/forgot`, data)
+}
+
 export function getSharedNote(token) {
   return get(`/items/share/${token}`)
 }

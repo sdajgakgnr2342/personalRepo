@@ -39,25 +39,32 @@ function buildLast7DaySeries(rows) {
   return series;
 }
 
-async function countNotes(userId, { status, dateField, startDays, endDays } = {}) {
+async function countNotesInRecentDays(userId, { status, dateField = 'updated_at', days = 7 } = {}) {
   let sql = `SELECT COUNT(*) AS cnt FROM nb_item n
-    WHERE n.user_id = ? AND n.item_type = 'note' AND n.deleted_at IS NULL AND ${NOT_IN_TRASH}`;
-  const params = [userId];
+    WHERE n.user_id = ? AND n.item_type = 'note' AND n.deleted_at IS NULL AND ${NOT_IN_TRASH}
+      AND DATE(n.${dateField}) >= DATE_SUB(CURDATE(), INTERVAL ? DAY)`;
+  const params = [userId, days - 1];
   if (status) {
     sql += ' AND n.status = ?';
     params.push(status);
   }
-  if (dateField && startDays != null) {
-    if (endDays != null) {
-      sql += ` AND n.${dateField} >= DATE_SUB(NOW(), INTERVAL ? DAY) AND n.${dateField} < DATE_SUB(NOW(), INTERVAL ? DAY)`;
-      params.push(startDays, endDays);
-    } else {
-      sql += ` AND n.${dateField} >= DATE_SUB(NOW(), INTERVAL ? DAY)`;
-      params.push(startDays);
-    }
+  const [[row]] = await db.query(sql, params);
+  return Number(row.cnt) || 0;
+}
+
+/** 统计上一段 N 个自然日内的笔记数（紧挨最近 N 日之前） */
+async function countNotesInPreviousDays(userId, { status, dateField = 'updated_at', days = 7 } = {}) {
+  let sql = `SELECT COUNT(*) AS cnt FROM nb_item n
+    WHERE n.user_id = ? AND n.item_type = 'note' AND n.deleted_at IS NULL AND ${NOT_IN_TRASH}
+      AND DATE(n.${dateField}) >= DATE_SUB(CURDATE(), INTERVAL ? DAY)
+      AND DATE(n.${dateField}) < DATE_SUB(CURDATE(), INTERVAL ? DAY)`;
+  const params = [userId, days * 2 - 1, days - 1];
+  if (status) {
+    sql += ' AND n.status = ?';
+    params.push(status);
   }
   const [[row]] = await db.query(sql, params);
-  return row.cnt;
+  return Number(row.cnt) || 0;
 }
 
 async function queryDailySeries(userId, { status, dateField = 'updated_at' } = {}) {
@@ -132,6 +139,7 @@ const getStats = async (req, res) => {
     const [
       updatesThisWeek,
       newNotesThisWeek,
+      newNotesLastWeek,
       draftUpdatesThisWeek,
       draftUpdatesLastWeek,
       updatesLastWeek,
@@ -139,19 +147,20 @@ const getStats = async (req, res) => {
       draftDailyTrend,
       updateDailyTrend,
     ] = await Promise.all([
-      countNotes(userId, { status: 'normal', dateField: 'updated_at', startDays: 7 }),
-      countNotes(userId, { status: 'normal', dateField: 'created_at', startDays: 7 }),
-      countNotes(userId, { status: 'draft', dateField: 'updated_at', startDays: 7 }),
-      countNotes(userId, { status: 'draft', dateField: 'updated_at', startDays: 14, endDays: 7 }),
-      countNotes(userId, { status: 'normal', dateField: 'updated_at', startDays: 14, endDays: 7 }),
+      countNotesInRecentDays(userId, { status: 'normal', dateField: 'updated_at', days: 7 }),
+      countNotesInRecentDays(userId, { status: 'normal', dateField: 'created_at', days: 7 }),
+      countNotesInPreviousDays(userId, { status: 'normal', dateField: 'created_at', days: 7 }),
+      countNotesInRecentDays(userId, { status: 'draft', dateField: 'updated_at', days: 7 }),
+      countNotesInPreviousDays(userId, { status: 'draft', dateField: 'updated_at', days: 7 }),
+      countNotesInPreviousDays(userId, { status: 'normal', dateField: 'updated_at', days: 7 }),
       queryDailySeries(userId, { status: 'normal', dateField: 'created_at' }),
       queryDailySeries(userId, { status: 'draft', dateField: 'updated_at' }),
       queryDailySeries(userId, { status: 'normal', dateField: 'updated_at' }),
     ]);
 
     return ok(res, {
-      noteCount: noteCount.cnt,
-      draftCount: draftCount.cnt,
+      noteCount: Number(noteCount.cnt) || 0,
+      draftCount: Number(draftCount.cnt) || 0,
       weeklyUpdateCount: updatesThisWeek,
       recentNotes,
       trends: {
@@ -160,7 +169,7 @@ const getStats = async (req, res) => {
         updates: updateDailyTrend,
       },
       deltas: {
-        noteCount: newNotesThisWeek,
+        noteCount: newNotesThisWeek - newNotesLastWeek,
         draftCount: draftUpdatesThisWeek - draftUpdatesLastWeek,
         weeklyUpdates: updatesThisWeek - updatesLastWeek,
       },

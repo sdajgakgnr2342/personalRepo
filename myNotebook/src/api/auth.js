@@ -30,6 +30,22 @@ export function changePassword(data) {
   return post('/auth/change-password', data)
 }
 
+export function setSecretCode(data) {
+  return post('/auth/secret-code', data)
+}
+
+export function verifySecretCode(data) {
+  return post('/auth/verify-secret-code', data)
+}
+
+export function resetSecretCode(data) {
+  return post('/auth/reset-secret-code', data)
+}
+
+export function resetSecretCodeByLogin(data) {
+  return post('/auth/reset-secret-code-by-login', data)
+}
+
 export function logout() {
   return post('/auth/logout')
 }

@@ -10,5 +10,9 @@ router.get('/profile', authMiddleware, authController.profile);
 router.put('/profile', authMiddleware, authController.updateProfile);
 router.post('/avatar', authMiddleware, authController.uploadAvatar);
 router.post('/change-password', authMiddleware, authController.changePassword);
+router.post('/secret-code', authMiddleware, authController.setSecretCode);
+router.post('/verify-secret-code', authMiddleware, authController.verifySecretCode);
+router.post('/reset-secret-code', authMiddleware, authController.resetSecretCode);
+router.post('/reset-secret-code-by-login', authMiddleware, authController.resetSecretCodeByLogin);
 
 module.exports = router;

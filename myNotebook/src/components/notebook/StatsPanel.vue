@@ -17,8 +17,9 @@ const metricCards = computed(() => {
     {
       key: 'notes',
       label: '笔记总数',
-      value: s.noteCount || 0,
+      value: Math.max(0, Number(s.noteCount) || 0),
       delta: deltas.noteCount ?? 0,
+      deltaType: 'compare',
       trend: trends.notes || [],
       tone: 'blue',
       icon: 'note',
@@ -26,8 +27,9 @@ const metricCards = computed(() => {
     {
       key: 'updates',
       label: '近7天更新',
-      value: s.weeklyUpdateCount ?? s.recentNotes?.length ?? 0,
+      value: Math.max(0, Number(s.weeklyUpdateCount ?? s.recentNotes?.length) || 0),
       delta: deltas.weeklyUpdates ?? 0,
+      deltaType: 'compare',
       trend: trends.updates || [],
       tone: 'green',
       icon: 'stats',
@@ -35,8 +37,9 @@ const metricCards = computed(() => {
     {
       key: 'drafts',
       label: '草稿数量',
-      value: s.draftCount || 0,
+      value: Math.max(0, Number(s.draftCount) || 0),
       delta: deltas.draftCount ?? 0,
+      deltaType: 'compare',
       trend: trends.drafts || [],
       tone: 'orange',
       icon: 'drafts',
@@ -63,9 +66,23 @@ const displayNotes = computed(() => {
   )
 })
 
-function formatDelta(value) {
-  if (!value) return '持平'
-  return value > 0 ? `+${value}篇` : `${value}篇`
+function formatDelta(value, type = 'default') {
+  const n = Number(value) || 0
+  if (n === 0) return type === 'compare' ? '较上7天 持平' : '持平'
+  if (type === 'compare') {
+    return n > 0 ? `较上7天 +${n}` : `较上7天 ${n}`
+  }
+  return n > 0 ? `+${n}篇` : `${n}篇`
+}
+
+function deltaTitle(value, type = 'default') {
+  const n = Number(value) || 0
+  if (type === 'compare') {
+    if (n === 0) return '与上一段7天相比持平'
+    if (n > 0) return `比上一段7天多 ${n} 篇`
+    return `比上一段7天少 ${Math.abs(n)} 篇`
+  }
+  return ''
 }
 
 function deltaClass(value) {
@@ -162,8 +179,12 @@ const quickEntries = [
       >
         <div class="metric-card-top">
           <AppIcon :name="card.icon" :size="18" class="metric-icon" alt="" />
-          <span class="metric-delta" :class="deltaClass(card.delta)">
-            {{ formatDelta(card.delta) }}
+          <span
+            class="metric-delta"
+            :class="deltaClass(card.delta)"
+            :title="deltaTitle(card.delta, card.deltaType)"
+          >
+            {{ formatDelta(card.delta, card.deltaType) }}
           </span>
         </div>
         <div class="metric-num">{{ card.value }}</div>

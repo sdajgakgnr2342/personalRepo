@@ -1,7 +1,8 @@
 <script setup>
-import { ref } from 'vue'
+import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useVaultStore } from '@/stores/vault'
+import { getWebCryptoUnavailableMessage, isWebCryptoAvailable } from '@/crypto/vault'
 import { toastError, toastSuccess } from '@/utils/toast'
 
 const router = useRouter()
@@ -10,8 +11,19 @@ const vaultStore = useVaultStore()
 const password = ref('')
 const loading = ref(false)
 const errorMsg = ref('')
+const cryptoBlocked = ref(false)
+const cryptoHint = ref('')
+
+onMounted(() => {
+  if (!isWebCryptoAvailable()) {
+    cryptoBlocked.value = true
+    cryptoHint.value = getWebCryptoUnavailableMessage()
+    errorMsg.value = cryptoHint.value
+  }
+})
 
 async function handleSubmit() {
+  if (cryptoBlocked.value) return
   errorMsg.value = ''
   loading.value = true
   try {
@@ -34,13 +46,17 @@ async function handleSubmit() {
       <button type="button" class="text-btn" @click="router.push('/secret-room')">返回</button>
     </header>
 
+    <div v-if="cryptoBlocked" class="crypto-warn">
+      {{ cryptoHint }}
+    </div>
+
     <form class="form" @submit.prevent="handleSubmit">
       <label class="field">
         <span>保险柜密码</span>
-        <input v-model="password" type="password" autocomplete="current-password" required />
+        <input v-model="password" type="password" autocomplete="current-password" :disabled="cryptoBlocked" required />
       </label>
       <p v-if="errorMsg" class="error">{{ errorMsg }}</p>
-      <button type="submit" class="primary-btn" :disabled="loading">
+      <button type="submit" class="primary-btn" :disabled="loading || cryptoBlocked">
         {{ loading ? '验证中…' : '解锁' }}
       </button>
     </form>
@@ -100,6 +116,17 @@ async function handleSubmit() {
   margin: 0;
   color: #dc2626;
   font-size: 13px;
+}
+
+.crypto-warn {
+  margin-bottom: 16px;
+  padding: 12px 14px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: #92400e;
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+  border-radius: 8px;
 }
 
 .primary-btn {

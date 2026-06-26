@@ -1,4 +1,7 @@
 import { bufToB64, b64ToBuf, concatBytes } from './encoding'
+import { assertWebCrypto } from './webCrypto'
+
+export { isWebCryptoAvailable, getWebCryptoUnavailableMessage } from './webCrypto'
 
 const KEY_CHECK_LABEL = 'mynotebook-vault-v1'
 const DEFAULT_KDF = { iterations: 310000, hash: 'SHA-256' }
@@ -14,6 +17,7 @@ export function randomBytes(length) {
 }
 
 async function deriveKekPair(password, saltB64, kdfParams = DEFAULT_KDF) {
+  assertWebCrypto()
   const enc = new TextEncoder()
   const keyMaterial = await crypto.subtle.importKey(
     'raw',
@@ -47,6 +51,7 @@ async function importAesKey(rawBytes) {
 }
 
 export async function aesGcmEncrypt(key, plainBytes) {
+  assertWebCrypto()
   const iv = randomBytes(IV_LEN)
   const cipherBuf = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, plainBytes)
   const cipher = new Uint8Array(cipherBuf)
@@ -65,6 +70,7 @@ export async function aesGcmDecrypt(key, blobBytes) {
 }
 
 export async function computeKeyCheck(rawKekBytes) {
+  assertWebCrypto()
   const enc = new TextEncoder()
   const hmacKey = await crypto.subtle.importKey(
     'raw',
@@ -150,6 +156,7 @@ export async function decryptMeta(fek, b64) {
 }
 
 export async function computeManifestHmac(vmk, manifest) {
+  assertWebCrypto()
   const hmacKey = await crypto.subtle.importKey(
     'raw',
     vmk,

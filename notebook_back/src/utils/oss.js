@@ -1,7 +1,11 @@
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
+const { Readable } = require('stream');
 const attachmentTypes = require('../config/attachmentTypes');
+
+const MULTIPART_THRESHOLD_BYTES = 50 * 1024 * 1024;
+const DEFAULT_OSS_TIMEOUT_MS = 600000;
 
 let client = null;
 
@@ -57,6 +61,7 @@ function getClient() {
   if (!client) {
     const OSS = require('ali-oss');
     const cfg = getOssConfig();
+    const timeoutMs = Number(process.env.OSS_REQUEST_TIMEOUT_MS) || DEFAULT_OSS_TIMEOUT_MS;
     client = new OSS({
       region: cfg.region,
       accessKeyId: cfg.accessKeyId,
@@ -64,7 +69,7 @@ function getClient() {
       bucket: cfg.bucket,
       endpoint: cfg.endpoint,
       secure: cfg.secure,
-      timeout: 60000,
+      timeout: timeoutMs,
     });
   }
   return client;
@@ -118,7 +123,16 @@ async function uploadBuffer(buffer, objectKey, options = {}) {
   const headers = { ...(options.headers || {}) };
   if (options.contentType) headers['Content-Type'] = options.contentType;
 
-  const result = await getClient().put(key, buffer, { headers });
+  const client = getClient();
+  let result;
+  if (buffer.length >= MULTIPART_THRESHOLD_BYTES) {
+    result = await client.multipartUpload(key, Readable.from(buffer), {
+      partSize: 5 * 1024 * 1024,
+      headers,
+    });
+  } else {
+    result = await client.put(key, buffer, { headers });
+  }
 
   return {
     objectKey: key,

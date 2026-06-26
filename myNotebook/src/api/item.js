@@ -53,12 +53,14 @@ export function getAttachments(itemId) {
   return get(`/items/${itemId}/attachments`)
 }
 
+import { getAttachmentUploadTimeoutMs } from '@/config/upload'
+
 export function uploadAttachment(itemId, file, { onProgress } = {}) {
   const formData = new FormData()
   formData.append('file', file)
   return request.post(`/items/${itemId}/attachments`, formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
-    timeout: 60000,
+    timeout: getAttachmentUploadTimeoutMs(file.size),
     onUploadProgress: (event) => {
       if (!onProgress) return
       if (event.total) {

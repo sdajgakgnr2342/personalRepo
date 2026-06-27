@@ -1,10 +1,12 @@
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
 const multer = require('multer');
 const db = require('../config/db');
 const uploadConfig = require('../config/upload');
 const attachmentTypes = require('../config/attachmentTypes');
 const oss = require('../utils/oss');
+const attachmentStorage = require('../utils/attachmentStorage');
 const { ok, fail, checkItemAccess, decodeUploadFilename } = require('../utils/helpers');
 const {
   mapAttachmentRow,
@@ -12,9 +14,24 @@ const {
 } = require('../utils/attachmentAccess');
 
 const uploadDir = path.join(__dirname, '../../uploads');
+const uploadTmpDir = path.join(uploadDir, 'tmp');
+fs.mkdirSync(uploadTmpDir, { recursive: true });
 
 const upload = multer({
-  storage: multer.memoryStorage(),
+  storage: multer.diskStorage({
+    destination: (req, _file, cb) => {
+      if (attachmentStorage.useOssForAttachments()) {
+        cb(null, uploadTmpDir);
+        return;
+      }
+      const dir = attachmentStorage.ensureAttachmentDir(req.user.userId, req.params.id);
+      cb(null, dir);
+    },
+    filename: (_req, file, cb) => {
+      const ext = path.extname(file.originalname || '').toLowerCase();
+      cb(null, `${Date.now()}-${crypto.randomBytes(8).toString('hex')}${ext}`);
+    },
+  }),
   limits: { fileSize: uploadConfig.maxAttachmentBytes },
   fileFilter: (_req, file, cb) => {
     if (attachmentTypes.isAllowedAttachment(file)) {
@@ -62,8 +79,8 @@ async function requireNoteAccess(res, userId, item) {
 }
 
 function sendLocalFile(res, attachment) {
-  const filePath = path.join(uploadDir, path.basename(attachment.file_path));
-  if (!fs.existsSync(filePath)) return fail(res, '文件不存在', 404, 404);
+  const filePath = attachmentStorage.resolveAbsolutePath(attachment.file_path);
+  if (!filePath || !fs.existsSync(filePath)) return fail(res, '文件不存在', 404, 404);
 
   res.setHeader('Content-Type', attachment.file_type || 'application/octet-stream');
   res.setHeader(
@@ -118,7 +135,7 @@ const downloadAttachment = async (req, res) => {
 
     if (!authorized) return fail(res, '无权访问附件', 403, 403);
 
-    const publicUrl = oss.resolvePublicUrl(attachment.file_path);
+    const publicUrl = attachmentStorage.resolvePublicUrl(attachment.file_path);
     if (publicUrl.startsWith('http://') || publicUrl.startsWith('https://')) {
       return res.redirect(publicUrl);
     }
@@ -139,13 +156,21 @@ const uploadAttachment = [
       }
       return fail(res, err.message || '上传失败', 400, 400);
     }
-    if (err) return next(err);
+    if (err) {
+      console.error('upload multer error:', err.message);
+      return fail(res, err.message || '上传失败', 500, 500);
+    }
     return next();
   },
   async (req, res) => {
+    const tempPath = req.file?.path;
+    const useOss = attachmentStorage.useOssForAttachments();
+    let saved = false;
     try {
       if (!req.file) return fail(res, '请选择文件');
-      if (!oss.isOssEnabled()) return fail(res, 'OSS 未配置，无法上传文件', 500, 500);
+      if (useOss && !oss.isOssEnabled()) {
+        return fail(res, 'OSS 未配置，无法上传文件', 500, 500);
+      }
 
       const itemId = req.params.id;
       const [items] = await db.query(
@@ -158,44 +183,53 @@ const uploadAttachment = [
       const fileName = decodeUploadFilename(req.file.originalname);
       const contentType = attachmentTypes.normalizeContentType(fileName, req.file.mimetype);
 
-      const objectKey = oss.generateObjectKey(
-        `attachments/${req.user.userId}/${itemId}`,
-        fileName
-      );
-      const uploaded = await oss.uploadBuffer(req.file.buffer, objectKey, {
-        contentType,
-      });
+      let storedPath;
+      let fileSize;
+
+      if (useOss) {
+        const objectKey = oss.generateObjectKey(
+          `attachments/${req.user.userId}/${itemId}`,
+          fileName
+        );
+        const uploaded = await oss.uploadFile(tempPath, objectKey, { contentType });
+        storedPath = uploaded.objectKey;
+        fileSize = uploaded.size;
+      } else {
+        storedPath = path.relative(uploadDir, tempPath).split(path.sep).join('/');
+        fileSize = req.file.size;
+      }
 
       const [result] = await db.query(
         `INSERT INTO nb_attachment (item_id, user_id, file_name, file_path, file_type, file_size)
          VALUES (?, ?, ?, ?, ?, ?)`,
-        [
-          itemId,
-          req.user.userId,
-          fileName,
-          uploaded.objectKey,
-          contentType,
-          req.file.size,
-        ]
+        [itemId, req.user.userId, fileName, storedPath, contentType, fileSize]
       );
 
       const row = {
         id: result.insertId,
         file_name: fileName,
         file_type: contentType,
-        file_size: req.file.size,
-        file_path: uploaded.objectKey,
+        file_size: fileSize,
+        file_path: storedPath,
         created_at: new Date(),
       };
 
       const mapped = mapAttachmentRow(row, { userId: req.user.userId });
+      saved = true;
       return ok(res, mapped, '上传成功');
     } catch (error) {
-      console.error('uploadAttachment error:', error);
+      console.error('uploadAttachment error:', useOss ? oss.formatOssError(error) : error.message);
       if (error.message === '不支持的文件类型') {
         return fail(res, error.message, 400, 400);
       }
-      return fail(res, '上传失败', 500, 500);
+      const message = useOss
+        ? `上传失败：${oss.formatOssError(error)}`
+        : `上传失败：${error.message || '请检查服务器磁盘空间与目录权限'}`;
+      return fail(res, message, 500, 500);
+    } finally {
+      if (tempPath && ((useOss && saved) || (!useOss && !saved))) {
+        fs.unlink(tempPath, () => {});
+      }
     }
   },
 ];
@@ -232,7 +266,7 @@ const deleteAttachment = async (req, res) => {
     const item = await getNoteItemForAttachment(rows[0]);
     if (!item || !(await requireNoteAccess(res, req.user.userId, item))) return;
 
-    await oss.deleteStoredFile(rows[0].file_path);
+    await attachmentStorage.deleteStoredAttachment(rows[0].file_path);
     await db.query('DELETE FROM nb_attachment WHERE id = ?', [req.params.id]);
     return ok(res, null, '已删除');
   } catch (error) {

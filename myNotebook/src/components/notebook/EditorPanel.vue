@@ -4,7 +4,7 @@ import { useNotebookStore } from '@/stores/notebook'
 import { shareNote, uploadAttachment, getAttachments, deleteAttachment } from '@/api/item'
 import { toastSuccess, toastError, toastWarning, toastInfo, toastProgress, updateToast, dismiss } from '@/utils/toast'
 import { resolveUploadError, MAX_ATTACHMENT_SIZE, MAX_ATTACHMENT_SIZE_LABEL } from '@/utils/upload'
-import { ATTACHMENT_ACCEPT, isAllowedAttachmentFile, getAttachmentTypeError } from '@/config/attachmentTypes'
+import { getAttachmentInputAccept, isAllowedAttachmentFile, getAttachmentTypeError } from '@/config/attachmentTypes'
 import {
   EDITOR_IMAGE_MAX_WIDTH,
   EDITOR_IMAGE_MIN_WIDTH,
@@ -1628,7 +1628,7 @@ onBeforeUnmount(() => {
     />
 
     <input ref="imageInput" type="file" accept="image/*" hidden @change="handleImageChange" />
-    <input ref="fileInput" type="file" :accept="ATTACHMENT_ACCEPT" hidden @change="handleFileChange" />
+    <input ref="fileInput" type="file" :accept="getAttachmentInputAccept()" hidden @change="handleFileChange" />
 
     <Teleport to="body">
       <div

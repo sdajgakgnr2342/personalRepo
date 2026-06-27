@@ -22,10 +22,17 @@ function formatSizeLabel(bytes) {
 const maxAttachmentBytes = parseSizeMb('UPLOAD_MAX_ATTACHMENT_MB', 10);
 const maxAvatarBytes = parseSizeMb('UPLOAD_MAX_AVATAR_MB', 2);
 
+/** 笔记附件存储：local（服务器本地目录）| oss（阿里云 OSS） */
+function getAttachmentStorageMode() {
+  const mode = (process.env.ATTACHMENT_STORAGE || 'local').toLowerCase();
+  return mode === 'oss' ? 'oss' : 'local';
+}
+
 module.exports = {
   maxAttachmentBytes,
   maxAvatarBytes,
   maxAttachmentLabel: formatSizeLabel(maxAttachmentBytes),
   maxAvatarLabel: formatSizeLabel(maxAvatarBytes),
   formatSizeLabel,
+  getAttachmentStorageMode,
 };

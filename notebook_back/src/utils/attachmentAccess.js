@@ -1,6 +1,6 @@
 const path = require('path');
 const cryptoUtil = require('../utils/crypto');
-const oss = require('./oss');
+const attachmentStorage = require('./attachmentStorage');
 const { decodeUploadFilename } = require('./helpers');
 
 const SIGN_TTL_MS = 60 * 60 * 1000;
@@ -37,7 +37,7 @@ function escapeRegExp(value) {
 }
 
 function getStableContentUrl(filePath) {
-  return oss.resolvePublicUrl(filePath);
+  return attachmentStorage.resolvePublicUrl(filePath);
 }
 
 async function rewriteContentAttachmentUrls(db, html, { userId, itemId, shareToken = null } = {}) {

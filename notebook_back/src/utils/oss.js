@@ -1,7 +1,6 @@
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
-const { Readable } = require('stream');
 const attachmentTypes = require('../config/attachmentTypes');
 
 const MULTIPART_THRESHOLD_BYTES = 50 * 1024 * 1024;
@@ -96,12 +95,19 @@ async function uploadFile(localPath, objectKey, options = {}) {
     objectKey || generateObjectKey(options.folder || 'uploads', filename)
   );
 
-  const headers = { ...(options.headers || {}) };
-  const contentType = options.contentType || guessContentType(filename);
-  if (contentType) headers['Content-Type'] = contentType;
-
-  const result = await getClient().put(key, absPath, { headers });
   const stat = fs.statSync(absPath);
+  const contentType = options.contentType || guessContentType(filename);
+  const client = getClient();
+  let result;
+  if (stat.size >= MULTIPART_THRESHOLD_BYTES) {
+    result = await client.multipartUpload(key, absPath, {
+      partSize: 5 * 1024 * 1024,
+      mime: contentType,
+    });
+  } else {
+    const headers = { ...(options.headers || {}), 'Content-Type': contentType };
+    result = await client.put(key, absPath, { headers });
+  }
 
   return {
     objectKey: key,
@@ -109,6 +115,19 @@ async function uploadFile(localPath, objectKey, options = {}) {
     etag: result.etag,
     size: stat.size,
   };
+}
+
+function formatOssError(error) {
+  if (!error) return '未知错误';
+  const parts = [];
+  if (error.code) parts.push(String(error.code));
+  if (error.status) parts.push(`HTTP ${error.status}`);
+  if (error.requestId) parts.push(`requestId=${error.requestId}`);
+  const msg = String(error.message || '').trim();
+  if (msg && !parts.some((p) => msg.includes(p))) {
+    parts.push(msg.length > 120 ? `${msg.slice(0, 120)}…` : msg);
+  }
+  return parts.join(' · ') || '未知错误';
 }
 
 /**
@@ -120,17 +139,16 @@ async function uploadBuffer(buffer, objectKey, options = {}) {
   }
 
   const key = buildObjectKey(objectKey);
-  const headers = { ...(options.headers || {}) };
-  if (options.contentType) headers['Content-Type'] = options.contentType;
-
   const client = getClient();
+  const contentType = options.contentType || guessContentType(objectKey) || 'application/octet-stream';
   let result;
   if (buffer.length >= MULTIPART_THRESHOLD_BYTES) {
-    result = await client.multipartUpload(key, Readable.from(buffer), {
+    result = await client.multipartUpload(key, buffer, {
       partSize: 5 * 1024 * 1024,
-      headers,
+      mime: contentType,
     });
   } else {
+    const headers = { ...(options.headers || {}), 'Content-Type': contentType };
     result = await client.put(key, buffer, { headers });
   }
 
@@ -201,13 +219,18 @@ function generateObjectKey(folder, originalName) {
 function resolvePublicUrl(storedPath) {
   if (!storedPath) return '';
   if (/^https?:\/\//i.test(storedPath)) return storedPath;
+  if (storedPath.startsWith('/uploads/')) return storedPath;
+
+  const attachmentStorage = (process.env.ATTACHMENT_STORAGE || 'local').toLowerCase();
+  if (storedPath.startsWith('attachments/') && attachmentStorage !== 'oss') {
+    return `/uploads/${storedPath}`;
+  }
 
   if (isOssEnabled()) {
     return getPublicUrl(extractObjectKey(storedPath));
   }
 
   const basename = path.basename(storedPath);
-  if (storedPath.startsWith('/uploads/')) return storedPath;
   return `/uploads/${basename}`;
 }
 
@@ -216,6 +239,19 @@ function resolvePublicUrl(storedPath) {
  */
 async function deleteStoredFile(storedPath) {
   if (!storedPath) return;
+
+  const attachmentStorage = (process.env.ATTACHMENT_STORAGE || 'local').toLowerCase();
+  if (storedPath.startsWith('attachments/') && attachmentStorage !== 'oss') {
+    const localPath = path.join(__dirname, '../../uploads', storedPath);
+    if (fs.existsSync(localPath)) {
+      try {
+        fs.unlinkSync(localPath);
+      } catch {
+        /* ignore */
+      }
+    }
+    return;
+  }
 
   if (/^https?:\/\//i.test(storedPath)) {
     if (isOssEnabled()) {
@@ -269,6 +305,7 @@ module.exports = {
   extractObjectKey,
   generateObjectKey,
   guessContentType,
+  formatOssError,
   resolvePublicUrl,
   deleteStoredFile,
 };
